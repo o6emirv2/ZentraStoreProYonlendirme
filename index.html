@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=0.80, minimum-scale=0.80, maximum-scale=0.80, user-scalable=no, viewport-fit=cover" />
+    <title>Shelby Store Artık Zentra Store!</title>
+    
+    <!-- Google Fonts: Orbitron for futuristic headings, Poppins for readable text -->
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Social Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        :root {
+            --bg-dark: #07070a;
+            --zentra-blue: #00d2ff;
+            --zentra-purple: #5a32fa;
+            --shelby-red: #ff3300;
+            --shelby-blue: #0066ff;
+            --text-light: #e0e0e0;
+            --warning-red: #ff003c;
+            --glass-bg: rgba(12, 12, 18, 0.85);
+            --glass-border: rgba(255, 255, 255, 0.03);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-light);
+            font-family: 'Poppins', sans-serif;
+            overflow-x: hidden;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        #particle-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            width: 92%;
+            max-width: 600px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 3rem 2rem;
+            text-align: center;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            margin: 2rem 0;
+            animation: containerFadeIn 1s ease-out forwards;
+        }
+
+        @keyframes containerFadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .brand-transition-area {
+            position: relative;
+            height: 80px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .brand-text {
+            position: absolute;
+            font-family: 'Orbitron', sans-serif;
+            font-size: clamp(1.8rem, 6vw, 2.5rem);
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            width: 100%;
+        }
+
+        .brand-old {
+            background: linear-gradient(45deg, var(--shelby-blue), var(--shelby-red));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 15px rgba(255, 51, 0, 0.4);
+            animation: fadeOutOld 3.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        .brand-new {
+            background: linear-gradient(90deg, var(--zentra-blue), #9b00ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            opacity: 0;
+            transform: scale(0.9);
+            animation: fadeInNew 3.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        @keyframes fadeOutOld {
+            0%, 30% { opacity: 1; transform: scale(1); filter: blur(0); }
+            60% { opacity: 0; transform: scale(1.05); filter: blur(8px); }
+            100% { opacity: 0; transform: scale(1.05); visibility: hidden; }
+        }
+
+        @keyframes fadeInNew {
+            0%, 40% { opacity: 0; transform: scale(0.9); filter: blur(8px); }
+            70% { opacity: 1; transform: scale(1.02); filter: blur(0); text-shadow: 0 0 25px rgba(0, 210, 255, 0.6); }
+            100% { opacity: 1; transform: scale(1); text-shadow: 0 0 15px rgba(0, 210, 255, 0.5); }
+        }
+
+        .subtitle {
+            font-size: 1rem;
+            color: #8e8e9f;
+            margin-bottom: 2.5rem;
+            font-weight: 300;
+            animation: fadeInDelay 4s ease forwards;
+            opacity: 0;
+        }
+
+        @keyframes fadeInDelay {
+            to { opacity: 1; }
+        }
+
+        .warning-box {
+            background: rgba(20, 0, 5, 0.6);
+            border: 1px solid var(--warning-red);
+            border-radius: 12px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.8rem;
+            margin-bottom: 3rem;
+            box-shadow: 0 0 20px rgba(255, 0, 60, 0.15), inset 0 0 10px rgba(255, 0, 60, 0.1);
+            animation: pulseWarning 2.5s infinite alternate;
+        }
+
+        @keyframes pulseWarning {
+            from { box-shadow: 0 0 15px rgba(255, 0, 60, 0.15), inset 0 0 10px rgba(255, 0, 60, 0.05); }
+            to { box-shadow: 0 0 25px rgba(255, 0, 60, 0.3), inset 0 0 15px rgba(255, 0, 60, 0.15); }
+        }
+
+        .warning-icon {
+            font-size: 2rem;
+            color: var(--warning-red);
+            text-shadow: 0 0 10px var(--warning-red);
+        }
+
+        .warning-text h3 {
+            color: var(--warning-red);
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+            letter-spacing: 1px;
+            text-shadow: 0 0 10px rgba(255, 0, 60, 0.3);
+        }
+
+        .warning-text p {
+            font-size: 0.85rem;
+            color: #b0b0c0;
+            line-height: 1.5;
+        }
+        
+        .warning-text strong {
+            color: #fff;
+            font-weight: 500;
+        }
+
+        .cta-container {
+            margin-bottom: 3rem;
+            opacity: 0;
+            animation: fadeInDelay 4s ease forwards;
+        }
+
+        .cta-button {
+            display: inline-block;
+            text-decoration: none;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+            background: transparent;
+            padding: 1rem 2.5rem;
+            border-radius: 50px;
+            border: 2px solid var(--zentra-purple);
+            position: relative;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(90, 50, 250, 0.3), inset 0 0 10px rgba(90, 50, 250, 0.2);
+            letter-spacing: 1px;
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(90, 50, 250, 0.5), inset 0 0 15px rgba(90, 50, 250, 0.3);
+            background: rgba(90, 50, 250, 0.1);
+        }
+
+        .social-section h4 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1rem;
+            color: #6a6a80;
+            margin-bottom: 1.2rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            opacity: 0;
+            animation: fadeInDelay 4s ease forwards;
+        }
+
+        .social-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+            opacity: 0;
+            animation: fadeInDelay 4s ease forwards;
+        }
+
+        .social-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 1rem;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            color: #d0d0e0;
+            text-decoration: none;
+            font-weight: 400;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+
+        .social-btn i {
+            font-size: 1.2rem;
+            color: #8e8e9f;
+            transition: color 0.3s ease;
+        }
+
+        .social-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            transform: translateY(-2px);
+        }
+
+        .social-btn.telegram:hover i { color: #0088cc; }
+        .social-btn.tiktok:hover i { color: #ff0050; }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 2.5rem 1.2rem;
+                width: 95%;
+            }
+            .warning-text p {
+                font-size: 0.8rem;
+            }
+            .cta-button {
+                padding: 0.9rem 2rem;
+                font-size: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Background Particle Canvas -->
+    <canvas id="particle-canvas"></canvas>
+
+    <div class="container">
+        
+        <!-- Brand Transition Animation -->
+        <div class="brand-transition-area">
+            <div class="brand-text brand-old">SHELBY STORE</div>
+            <div class="brand-text brand-new">ZENTRA STORE</div>
+        </div>
+
+        <p class="subtitle">İsmimiz, logomuz ve altyapımız tamamen yenilendi!</p>
+
+        <!-- Warning Box -->
+        <div class="warning-box">
+            <i class="fas fa-exclamation-triangle warning-icon"></i>
+            <div class="warning-text">
+                <h3>DOLANDIRICILARA İNANMAYINIZ!</h3>
+                <p>Resmi hesaplarımız dışında işlem yapmayın, kimseye para göndermeyin. Tek resmi adresimiz <strong>zentrastore.com.tr</strong>'dir.</p>
+            </div>
+        </div>
+
+        <!-- Main Call to Action -->
+        <div class="cta-container">
+            <a href="https://zentrastore.com.tr" class="cta-button">YENİ SİTEMİZE GİT</a>
+        </div>
+
+        <!-- Social Media Links -->
+        <div class="social-section">
+            <h4>RESMİ BAĞLANTILARIMIZ</h4>
+            <div class="social-grid">
+                <a href="https://t.me/+B_m6rCQxMhQ5MjFk" target="_blank" class="social-btn telegram">
+                    <i class="fab fa-telegram"></i> Telegram Kanalı
+                </a>
+                <a href="https://t.me/+t17sK4mUhbszZTM0" target="_blank" class="social-btn telegram">
+                    <i class="fas fa-shield-alt"></i> Güvence Kanalı
+                </a>
+                <a href="https://t.me/+chmRui3czAdhNTE0" target="_blank" class="social-btn telegram">
+                    <i class="fas fa-comments"></i> Sohbet Grubu
+                </a>
+                <a href="https://t.me/zentrastorefree" target="_blank" class="social-btn telegram">
+                    <i class="fas fa-gift"></i> Ücretsiz İçerikler
+                </a>
+                <a href="https://www.tiktok.com/@shelbystorelive" target="_blank" class="social-btn tiktok">
+                    <i class="fab fa-tiktok"></i> TikTok Hesabı
+                </a>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const canvas = document.getElementById('particle-canvas');
+        const ctx = canvas.getContext('2d');
+
+        let particles = [];
+        const particleCount = 50; // Azaltılmış partikül sayısı daha profesyonel durur
+        
+        const colors = [
+            'rgba(0, 210, 255, 0.4)', 
+            'rgba(90, 50, 250, 0.4)', 
+            'rgba(255, 255, 255, 0.1)'
+        ];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        class Particle {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 2 + 0.5;
+                this.speedX = Math.random() * 0.5 - 0.25;
+                this.speedY = Math.random() * -1 - 0.2;
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.glow = Math.random() * 10 + 2;
+            }
+
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+
+                if (this.y < 0) {
+                    this.y = canvas.height;
+                    this.x = Math.random() * canvas.width;
+                }
+                if (this.x > canvas.width || this.x < 0) {
+                    this.speedX = -this.speedX;
+                }
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = this.glow;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+            }
+        }
+
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < particleCount; i++) {
+                particles.push(new Particle());
+            }
+        }
+
+        function animateParticles() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update();
+                particles[i].draw();
+            }
+            
+            requestAnimationFrame(animateParticles);
+        }
+
+        initParticles();
+        animateParticles();
+    </script>
+</body>
+</html>
