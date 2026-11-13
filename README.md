@@ -1,0 +1,2 @@
+# ZentraStoreProYonlendirme
+ZENTRA STORE YÖNLENDİRME
