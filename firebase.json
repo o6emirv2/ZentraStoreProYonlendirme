@@ -1,0 +1,82 @@
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "cleanUrls": false,
+    "trailingSlash": false,
+    "rewrites": [
+      {
+        "source": "/games/chess",
+        "destination": "/games-chess-index.html"
+      },
+      {
+        "source": "/games/chess/",
+        "destination": "/games-chess-index.html"
+      },
+      {
+        "source": "/games/crash",
+        "destination": "/games-crash-index.html"
+      },
+      {
+        "source": "/games/crash/",
+        "destination": "/games-crash-index.html"
+      },
+      {
+        "source": "/games/pisti",
+        "destination": "/games-pisti-index.html"
+      },
+      {
+        "source": "/games/pisti/",
+        "destination": "/games-pisti-index.html"
+      },
+      {
+        "source": "/games/snake-pro",
+        "destination": "/games-snake-pro-index.html"
+      },
+      {
+        "source": "/games/snake-pro/",
+        "destination": "/games-snake-pro-index.html"
+      },
+      {
+        "source": "/games/space-pro",
+        "destination": "/games-space-pro-index.html"
+      },
+      {
+        "source": "/games/space-pro/",
+        "destination": "/games-space-pro-index.html"
+      },
+      {
+        "source": "/games/pattern-master",
+        "destination": "/games-pattern-master-index.html"
+      },
+      {
+        "source": "/games/pattern-master/",
+        "destination": "/games-pattern-master-index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "**/*.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "**/*.js",
+        "headers": [
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          }
+        ]
+      }
+    ]
+  }
+}

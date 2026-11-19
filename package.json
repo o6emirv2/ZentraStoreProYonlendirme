@@ -1,16 +1,19 @@
 {
-  "name": "playmatrix-clean-production",
-  "version": "10.0.0",
+  "name": "playmatrix-flat-root",
+  "version": "12.0.0",
   "private": true,
   "type": "commonjs",
-  "description": "PlayMatrix production build - modular backend, restored online games, market, XP and runtime memory architecture",
+  "description": "PlayMatrix root-flat games/public/server source layout, Firebase Hosting and Render API",
   "main": "server.js",
   "engines": {
     "node": ">=20 <23"
   },
   "scripts": {
     "start": "node server.js",
-    "check:server": "node --check server.js"
+    "check:server": "node --check server.js",
+    "check:syntax": "node tests-validate.cjs",
+    "build:hosting": "node scripts-build-hosting.cjs",
+    "test": "node tests-validate.cjs"
   },
   "dependencies": {
     "compression": "^1.7.4",
@@ -20,6 +23,7 @@
     "helmet": "^7.1.0",
     "socket.io": "^4.7.5",
     "xss": "^1.0.15",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "firebase": "^10.12.2"
   }
 }

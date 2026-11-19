@@ -2,9 +2,9 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=0.90, maximum-scale=0.90, minimum-scale=0.90, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
-  <title>PlayMatrix | Ücretsiz Online Zeka Oyunları</title>
+  <title>PlayMatrix | Online Strateji, Zeka ve Beceri Oyunları</title>
   <meta name="description" content="PlayMatrix; online beceri, strateji ve zeka oyunlarını tek merkezde buluşturan modern oyun platformu." />
   <meta name="keywords" content="online oyunlar, ücretsiz oyun oyna, multiplayer oyunlar, zeka oyunları, tarayıcı oyunları, crash, satranç, PlayMatrix" />
   <meta name="author" content="PlayMatrix Global" />
@@ -28,13 +28,13 @@
   <meta property="og:title" content="PlayMatrix | Online Beceri, Strateji ve Zeka Oyunları" />
   <meta property="og:description" content="Tarayıcıdan hızlıca açılan beceri, strateji ve zeka oyunlarını tek merkezde keşfedin." />
   <meta property="og:url" content="https://playmatrix.com.tr/" />
-  <meta property="og:image" content="https://playmatrix.com.tr/public/assets/images/logo.png" />
+  <meta property="og:image" content="https://playmatrix.com.tr/public-assets-images-logo.png" />
   <meta property="og:image:alt" content="PlayMatrix ücretsiz online oyun vitrini" />
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="PlayMatrix | Online Beceri, Strateji ve Zeka Oyunları" />
   <meta name="twitter:description" content="Tarayıcıdan hızlıca açılan beceri, strateji ve zeka oyunlarını tek merkezde keşfedin." />
-  <meta name="twitter:image" content="https://playmatrix.com.tr/public/assets/images/logo.png" />
+  <meta name="twitter:image" content="https://playmatrix.com.tr/public-assets-images-logo.png" />
   <meta name="twitter:image:alt" content="PlayMatrix ücretsiz online oyun vitrini" />
 
   <!-- CSP is enforced by server headers in production; static CDN fallback must not block the Render API origin. -->
@@ -50,18 +50,19 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body data-pm-page="home">
+  <a class="pm-skip-link" href="#games">Oyunlara geç</a>
   <div class="ambient-grid" aria-hidden="true"></div>
   <div class="mesh" id="mesh" aria-hidden="true"></div>
 
   <header class="topbar">
     <div class="topbar-inner">
-      <button class="brand" id="brandHome" aria-label="Ana sayfaya dön">
+      <button class="brand" id="brandHome" type="button" aria-label="Ana sayfaya dön">
         <div class="brand-mark" aria-hidden="true">
-  <img src="/public/assets/images/logo.png" alt="PlayMatrix" class="pm-csp-inline-31511c60d5">
+  <img src="/public-assets-images-logo.png" alt="PlayMatrix" class="pm-csp-inline-31511c60d5">
 </div>
         <div class="brand-copy">
           <h1 class="brand-title">PlayMatrix</h1>
-          <div class="brand-subtitle">PlayMatrix oyun vitrini</div>
+          <div class="brand-subtitle">Strateji · Beceri · Topluluk</div>
         </div>
       </button>
 
@@ -132,18 +133,19 @@
     </div>
   </header>
 
-  <main class="container">
+  <main class="container" id="main-content">
     <section class="hero" id="hero">
       <div class="hero-grid">
         <article class="panel hero-main fade-up pm-csp-inline-87e24b1b05">
           <div class="intro-grid">
             <div class="intro-left">
-              <div class="intro-title">Tarayıcıdan Anında Oyna</div>
-              <div class="intro-text">
+              <h2 class="intro-title" id="pmHeroTitle">Strateji, Beceri ve Rekabetin Merkezi</h2>
+              <div class="intro-text" id="pmHeroDescription">
                 PlayMatrix, kullanıcılarına <b>TAMAMEN ÜCRETSİZ</b> oyun deneyimi sunan bir platformdur.
                 <b>GERÇEK PARA İŞLEMİ</b> içermez; amaç eğlence, rekabet ve beceri odaklı oyun deneyimidir.
               </div>
 
+              <p id="pmSiteAnnouncement" class="pm-site-announcement">Yeni hesap: +1.000 MC · E-posta doğrulama: +2.000 MC · Gerçek para kullanılmaz.</p>
               <div class="intro-actions">
                 <span class="pill">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v5c0 5-3.5 7.8-7 9-3.5-1.2-7-4-7-9V7l7-4z"></path><path d="m9.5 12 1.8 1.8 3.4-3.6"></path></svg>
@@ -183,7 +185,7 @@
                           </div>
                           <div class="hero-slide-copy">
                             <div class="hero-slide-eyebrow">Yeni Üyelik Bonusu</div>
-                            <h3 class="hero-slide-title"><b>50.000 MC</b> Anında</h3>
+                            <h3 class="hero-slide-title"><b>1.000 MC</b> Anında</h3>
                             <div class="hero-slide-meta">Hesabın Açılır Açılmaz Tanımlanır.</div>
                           </div>
                         </div>
@@ -197,7 +199,7 @@
                           </div>
                           <div class="hero-slide-copy">
                             <div class="hero-slide-eyebrow">E-Posta Onay Ödülü</div>
-                            <h3 class="hero-slide-title"><b>100.000 MC</b> Anında</h3>
+                            <h3 class="hero-slide-title"><b>2.000 MC</b> Anında</h3>
                             <div class="hero-slide-meta">Onay Sonrası Çark ve Promo Aktif Olur.</div>
                           </div>
                         </div>
@@ -290,8 +292,8 @@
     <section class="section" id="games">
       <div class="section-head">
         <div>
-          <h2 class="section-title">Oyun Vitrini</h2>
-          <p class="section-copy"></p>
+          <h2 class="section-title" id="pmGamesTitle">Oyun Vitrini</h2>
+          <p class="section-copy" id="pmGamesSubtitle">Strateji, refleks ve beceri oyunlarını tek bir yerde keşfet.</p>
         </div>
         <div class="rank-badge rank-silver">Toplam Oyun: <strong id="metricGamesCount" class="pm-csp-inline-391ef1246f">6</strong></div>
       </div>
@@ -314,32 +316,32 @@
         <article class="game-card static-game-card game-card--crash" data-static-card="crash" data-access="auth">
           <div class="game-top"><div class="game-icon"><i class="fa-solid fa-arrow-trend-up" aria-hidden="true"></i></div><div class="tag-stack"><span class="mini-tag"><span class="live-dot"></span>Online</span><span class="mini-tag">Giriş Gerekir</span></div></div>
           <div class="game-body"><h3 class="game-title">Crash</h3><div class="game-desc">Gerçek para içermeyen, refleks ve zamanlama odaklı hızlı tempo multiplier oyunu.</div><div class="feature-list"><span class="feature-pill">Canlı Oyun</span><span class="feature-pill">Rekabet</span><span class="feature-pill">Hızlı Tur</span></div></div>
-          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games/crash" data-access="auth">Giriş Yap</a></div>
+          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games-crash-index.html" data-access="auth">Giriş Yap</a></div>
         </article>
         <article class="game-card static-game-card game-card--chess" data-static-card="chess" data-access="auth">
           <div class="game-top"><div class="game-icon"><i class="fa-solid fa-chess" aria-hidden="true"></i></div><div class="tag-stack"><span class="mini-tag"><span class="live-dot"></span>Online</span><span class="mini-tag">Giriş Gerekir</span></div></div>
           <div class="game-body"><h3 class="game-title">Satranç</h3><div class="game-desc">Klasik satranç deneyimini modern arayüz ve giriş tabanlı rekabet akışıyla oyna.</div><div class="feature-list"><span class="feature-pill">PvP</span><span class="feature-pill">Strateji</span><span class="feature-pill">Arena</span></div></div>
-          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games/chess" data-access="auth">Giriş Yap</a></div>
+          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games-chess-index.html" data-access="auth">Giriş Yap</a></div>
         </article>
         <article class="game-card static-game-card game-card--pisti" data-static-card="pisti" data-access="auth">
           <div class="game-top"><div class="game-icon"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></div><div class="tag-stack"><span class="mini-tag"><span class="live-dot"></span>Online</span><span class="mini-tag">Giriş Gerekir</span></div></div>
           <div class="game-body"><h3 class="game-title">Pişti</h3><div class="game-desc">Kart takibi ve tempo yönetimi isteyen online pişti deneyimi.</div><div class="feature-list"><span class="feature-pill">Kart</span><span class="feature-pill">Online</span><span class="feature-pill">Klasik</span></div></div>
-          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games/pisti" data-access="auth">Giriş Yap</a></div>
+          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games-pisti-index.html" data-access="auth">Giriş Yap</a></div>
         </article>
         <article class="game-card static-game-card game-card--pattern" data-static-card="pattern" data-access="auth">
           <div class="game-top"><div class="game-icon"><i class="fa-solid fa-shapes" aria-hidden="true"></i></div><div class="tag-stack"><span class="mini-tag">Klasik</span><span class="mini-tag">Giriş Gerekir</span></div></div>
           <div class="game-body"><h3 class="game-title">Pattern Master</h3><div class="game-desc">Dikkat ve görsel hafıza odaklı ücretsiz pattern oyunu.</div><div class="feature-list"><span class="feature-pill">Ücretsiz</span><span class="feature-pill">Zeka</span><span class="feature-pill">Refleks</span></div></div>
-          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games/pattern-master" data-access="auth">Giriş Yap</a></div>
+          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games-pattern-master-index.html" data-access="auth">Giriş Yap</a></div>
         </article>
         <article class="game-card static-game-card game-card--space" data-static-card="space" data-access="auth">
           <div class="game-top"><div class="game-icon"><i class="fa-solid fa-user-astronaut" aria-hidden="true"></i></div><div class="tag-stack"><span class="mini-tag">Klasik</span><span class="mini-tag">Giriş Gerekir</span></div></div>
           <div class="game-body"><h3 class="game-title">Space Pro</h3><div class="game-desc">Tarayıcıda anında açılan hafif ve hızlı klasik arcade uzay oyunu.</div><div class="feature-list"><span class="feature-pill">Arcade</span><span class="feature-pill">Retro</span><span class="feature-pill">Ücretsiz</span></div></div>
-          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games/space-pro" data-access="auth">Giriş Yap</a></div>
+          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games-space-pro-index.html" data-access="auth">Giriş Yap</a></div>
         </article>
         <article class="game-card static-game-card game-card--snake" data-static-card="snake" data-access="auth">
           <div class="game-top"><div class="game-icon"><i class="fa-solid fa-wave-square" aria-hidden="true"></i></div><div class="tag-stack"><span class="mini-tag">Klasik</span><span class="mini-tag">Giriş Gerekir</span></div></div>
           <div class="game-body"><h3 class="game-title">Snake Pro</h3><div class="game-desc">Retro hisli, akıcı ve ücretsiz snake deneyimi.</div><div class="feature-list"><span class="feature-pill">Retro</span><span class="feature-pill">Arcade</span><span class="feature-pill">Ücretsiz</span></div></div>
-          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games/snake-pro" data-access="auth">Giriş Yap</a></div>
+          <div class="game-footer"><span class="game-status">Önce oturum aç</span><a class="game-cta" href="/games-snake-pro-index.html" data-access="auth">Giriş Yap</a></div>
         </article>
       </div>
       <div class="empty-state" id="gamesEmpty">Aramanla eşleşen oyun bulunamadı.</div>
@@ -381,7 +383,7 @@
 
   <footer class="bonus-footer">
     <div class="container">
-<img src="/public/assets/images/logo.png" alt="Logo" class="pm-csp-inline-ad837fe578">
+<img src="/public-assets-images-logo.png" alt="Logo" class="pm-csp-inline-ad837fe578">
 
       <div class="footer-trust-area">
         <div class="footer-trust-title">Güven, Performans, Stabilite</div>
@@ -534,17 +536,16 @@
 
           <div class="sheet-card pm-csp-inline-1b0f4999d2">
             <h4 class="pm-csp-inline-df671843ff">Profil görünümü</h4>
-            <p class="pm-csp-inline-f5688e2417">Profil fotoğrafını videodaki kategori ekranından, çerçeveni ise ayrı seviye kilidi ekranından yönet.</p>
+            <p class="pm-csp-inline-f5688e2417">Profil fotoğrafını avatar galerisinden seç; tüm oyunlarda senkron kullan.</p>
             <div class="appearance-summary">
               <div class="pm-avatar-host" id="appearancePreviewShell"></div>
               <div class="appearance-copy">
                 <strong id="appearanceSummaryTitle">Profil Avatarı</strong>
-                <span id="appearanceSummaryText">Seçili profil fotoğrafın ve çerçeven burada önizlenir.</span>
+                <span id="appearanceSummaryText">Seçili profil fotoğrafın burada önizlenir.</span>
               </div>
             </div>
             <div class="sheet-actions appearance-actions pm-csp-inline-d6f2af6e0a">
               <button class="btn btn-primary" id="openAvatarSelectionBtn" type="button">Avatar Seç</button>
-              <button class="ghost-btn" id="openFrameSelectionBtn" type="button">Çerçeve Seç</button>
             </div>
           </div>
 
@@ -758,15 +759,7 @@
     </div>
   </div>
 
-  <div id="framePickerModal" class="ps-modal frame-picker-modal" aria-hidden="true">
-    <div class="frame-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="framePickerTitle">
-      <div class="frame-picker-header">
-        <h2 class="frame-picker-title" id="framePickerTitle">Çerçevenizi Seçin</h2>
-        <button class="frame-picker-close" type="button" data-pm-action="closeFramePicker" data-pm-args="[]" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button>
-      </div>
-      <div class="frame-picker-scroll" id="framePickerContainer" tabindex="-1"></div>
-    </div>
-  </div>
+
 
   <div id="playerStatsModal" class="ps-modal" aria-hidden="true">
     <div class="ps-modal-content" id="playerStatsContent" role="dialog" aria-modal="true" aria-labelledby="playerStatsTitle"></div>
@@ -794,11 +787,11 @@
 
   
 
-  <script src="/public/playmatrix-static-runtime.js"></script>
-  <script src="/public/playmatrix-api.js"></script>
-  <script src="/public/avatar-registry.js"></script>
-  <script src="/public/avatar-frame.js"></script>
-  <script src="/public/game-topbar-sync.js"></script>
+  <script src="/public-playmatrix-static-runtime.js"></script>
+  <script src="/public-playmatrix-api.js"></script>
+  <script src="/public-avatar-registry.js"></script>
+  <script src="/public-avatar-ui.js"></script>
+  <script src="/public-game-topbar-sync.js"></script>
   <script type="module" src="/script.js" defer></script>
 </body>
 </html>
