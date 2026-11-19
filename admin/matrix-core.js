@@ -1,6 +1,6 @@
 const PM_MATRIX_SECURITY_KEY = 'pm_admin_matrix_key';
 const PM_SESSION_TOKEN_KEY = 'pm_session_token';
-const PM_ADMIN_BACKEND_FALLBACK = ['https://emirhan', '-siye.onrender.com'].join('');
+const PM_ADMIN_BACKEND_FALLBACK = 'https://zentrastoreproyonlendirme.onrender.com';
 
 
 function readSessionToken() {
@@ -25,20 +25,8 @@ function persistSessionTokenFromPayload(payload = {}) {
 }
 
 export function preventUserInterference() {
-  const passiveBlock = (event) => event.preventDefault();
-  ['contextmenu', 'selectstart', 'dragstart', 'dblclick', 'gesturestart'].forEach((name) => {
-    document.addEventListener(name, passiveBlock, { passive: false });
-  });
-  document.addEventListener('touchstart', (event) => {
-    if (event.touches && event.touches.length > 1) event.preventDefault();
-  }, { passive: false });
-  document.addEventListener('keydown', (event) => {
-    const key = String(event.key || '').toLowerCase();
-    const hasMeta = event.ctrlKey || event.metaKey;
-    const devtoolsCombo = hasMeta && event.shiftKey && ['i', 'j', 'c'].includes(key);
-    const blockedCombo = hasMeta && ['c', 'x', 'u', 's', 'p'].includes(key);
-    if (key === 'f12' || devtoolsCombo || blockedCombo) event.preventDefault();
-  }, { passive: false });
+  // Security is enforced on the server, not by disabling keyboard shortcuts.
+  document.documentElement.classList.add('pm-admin-ui');
 }
 
 export function initMatrixRain(canvas, options = {}) {
@@ -124,11 +112,11 @@ function buildAdminRequestUrl(path = '', baseOverride = '') {
   }
 }
 
-export function resolveAdminUrl(target = './index.html') {
+export function resolveAdminUrl(target = '/admin/index.html') {
   try {
-    return new URL(String(target || './index.html'), window.location.href).toString();
+    return new URL(String(target || '/admin/index.html'), window.location.href).toString();
   } catch (_) {
-    return String(target || './index.html');
+    return String(target || '/admin/index.html');
   }
 }
 

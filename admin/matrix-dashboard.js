@@ -1,10 +1,10 @@
-import { preventUserInterference, initMatrixRain, adminFetch, setSecurityKey, clearSecurityKey, money, formatWhen, resolveAdminUrl } from './matrix-core.js';
+import { preventUserInterference, initMatrixRain, adminFetch, setSecurityKey, clearSecurityKey, money, formatWhen, resolveAdminUrl } from '/admin/matrix-core.js';
 
 preventUserInterference();
 initMatrixRain(document.getElementById('matrixCanvas'), { fontSize: 14 });
 
-const INDEX_URL = resolveAdminUrl('./index.html');
-const BRAND_LOGO_URL = '/public/assets/images/logo.png';
+const INDEX_URL = resolveAdminUrl('/admin/index.html');
+const BRAND_LOGO_URL = '/public-assets-images-logo.png';
 const root = document.getElementById('adminRoot');
 const loader = document.getElementById('adminLoader');
 
@@ -30,6 +30,22 @@ function panelTemplate() {
         </div>
       </section>
 
+      <section class="panel stack" aria-labelledby="siteContentHeading">
+        <div><h2 id="siteContentHeading">ANA SAYFA İÇERİK YÖNETİMİ</h2>
+          <p class="lead">Başlıklar, vitrin metni ve duyuruyu Firestore'a kaydedin. Değişiklikler ana sayfaya otomatik uygulanır.</p></div>
+        <div class="field-grid">
+          <div class="field"><label for="siteHeroTitle">Ana başlık</label><input id="siteHeroTitle" maxlength="90" /></div>
+          <div class="field"><label for="siteGamesTitle">Oyun vitrini başlığı</label><input id="siteGamesTitle" maxlength="70" /></div>
+          <div class="field pm-admin-grid-span-all"><label for="siteHeroDescription">Ana açıklama</label><textarea id="siteHeroDescription" maxlength="420"></textarea></div>
+          <div class="field pm-admin-grid-span-all"><label for="siteGamesSubtitle">Oyun vitrini açıklaması</label><textarea id="siteGamesSubtitle" maxlength="220"></textarea></div>
+          <div class="field pm-admin-grid-span-all"><label for="siteAnnouncement">Duyuru</label><input id="siteAnnouncement" maxlength="180" /></div>
+        </div>
+        <h3>OYUN KARTLARI</h3>
+        <div class="field-grid" id="gameContentFields"></div>
+        <div class="action-row"><button id="saveSiteContentBtn" type="button">İÇERİĞİ KAYDET</button></div>
+        <div class="status" role="status" id="siteContentStatus"></div>
+      </section>
+
       <section class="panel stack">
         <div>
           <h2>DASHBOARD İSTATİSTİKLERİ</h2>
@@ -42,7 +58,7 @@ function panelTemplate() {
         <section class="panel stack">
           <div>
             <h2>TOPLU DURUM SIFIRLAMA</h2>
-            <p class="lead">Bakiye, seviye, aylık aktiflik, XP, aktiflik puanı ve seçili çerçeve alanlarını kontrollü biçimde sıfırlayın.</p>
+            <p class="lead">Bakiye, seviye, aylık aktiflik, XP ve aktiflik puanı alanlarını kontrollü biçimde sıfırlayın.</p>
           </div>
           <div class="check-grid" id="resetFieldGrid"></div>
           <div class="confirm-box">
@@ -282,7 +298,53 @@ async function ensureAccess() {
   }
 }
 
+const CONTENT_GAME_KEYS = Object.freeze(['crash','chess','pisti','pattern','space','snake']);
+const CONTENT_GAME_LABELS = Object.freeze(['Crash','Satranç','Pişti','Pattern Master','Space Pro','Snake Pro']);
+function mountGameContentEditor() {
+  const host = document.getElementById('gameContentFields');
+  if (!host || host.childElementCount) return;
+  CONTENT_GAME_KEYS.forEach((key, i) => {
+    for (const [fieldName, label, max] of [['gameTitles','Başlık',50],['gameDescriptions','Açıklama',230]]) {
+      const box = document.createElement('div'); box.className = 'field';
+      const node = document.createElement('input');
+      node.type = 'text'; node.id = `site-${fieldName}-${key}`; node.maxLength = max;
+      const header = document.createElement('label'); header.htmlFor = node.id;
+      header.textContent = `${CONTENT_GAME_LABELS[i]} · ${label}`;
+      box.append(header,node); host.append(box);
+    }
+  });
+}
+const CONTENT_FIELDS = Object.freeze({ heroTitle:'siteHeroTitle', heroDescription:'siteHeroDescription', gamesTitle:'siteGamesTitle', gamesSubtitle:'siteGamesSubtitle', announcement:'siteAnnouncement' });
+async function loadSiteContent() {
+  try {
+    mountGameContentEditor();
+    const payload = await adminFetch('/api/site/content');
+    for (const [key, id] of Object.entries(CONTENT_FIELDS)) {
+      const input = document.getElementById(id);
+      if (input && typeof payload?.content?.[key] === 'string') input.value = payload.content[key];
+    }
+    for (const type of ['gameTitles','gameDescriptions']) for (const key of CONTENT_GAME_KEYS) {
+      const input = document.getElementById(`site-${type}-${key}`);
+      if (input && typeof payload?.content?.[type]?.[key] === 'string') input.value = payload.content[type][key];
+    }
+    if (payload.persisted === false) setStatus('siteContentStatus', 'Varsayılan içerik yüklendi. Değişiklikleri kaydetmek için Firebase bağlantısı gereklidir.');
+  } catch (error) { setStatus('siteContentStatus', error.message, 'error'); }
+}
+async function saveSiteContent() {
+  const button = document.getElementById('saveSiteContentBtn');
+  const values = Object.fromEntries(Object.entries(CONTENT_FIELDS).map(([key,id]) => [key, document.getElementById(id)?.value || '']));
+  for (const type of ['gameTitles','gameDescriptions']) {
+    values[type] = Object.fromEntries(CONTENT_GAME_KEYS.map(key => [key, document.getElementById(`site-${type}-${key}`)?.value || '']));
+  }
+  if (button) button.disabled = true;
+  try {
+    await adminFetch('/api/admin/site/content', { method:'PUT', body:JSON.stringify(values) });
+    setStatus('siteContentStatus', 'İçerik başarıyla kaydedildi.', 'success');
+  } catch (error) { setStatus('siteContentStatus', error.message || 'İçerik kaydedilemedi.', 'error'); }
+  finally { if (button) button.disabled = false; }
+}
 async function loadDashboard() {
+  loadSiteContent().catch(() => null);
   const [dashboard, promos, issues] = await Promise.all([
     adminFetch('/api/admin/matrix/dashboard'),
     adminFetch('/api/admin/matrix/promos').catch(() => ({ items: [] })),
@@ -301,7 +363,7 @@ async function loadDashboard() {
 
   const resetLabels = [
     ['balance', 'Bakiye'], ['accountLevel', 'Seviye'], ['monthlyActiveScore', 'Aylık Aktiflik'],
-    ['accountXp', 'XP'], ['activityScore', 'Aktiflik Puanı'], ['selectedFrame', 'Seçili Çerçeve']
+    ['accountXp', 'XP'], ['activityScore', 'Aktiflik Puanı']
   ];
   replaceWithChildren(document.getElementById('resetFieldGrid'), resetLabels.map(([value, label]) => buildResetOption(value, label)));
 
@@ -355,7 +417,7 @@ async function handleAction(action) {
       if (confirmText !== 'ONAYLIYORUM') throw new Error('Yazılı onay gerekli.');
       if (!fields.length) throw new Error('Sıfırlanacak alan seçin.');
       await adminFetch('/api/admin/matrix/reset-nuclear', { method: 'POST', body: JSON.stringify({ fields, confirmText }) });
-      setStatus('resetStatus', 'Toplu sıfırlama tamamlandı.', 'ok');
+      setStatus('resetStatus', 'Önizleme tamamlandı; hiçbir veri sıfırlanmadı (güvenli mod).', 'ok');
       return loadDashboard();
     }
     if (action === 'save-maintenance') {
@@ -396,7 +458,7 @@ async function handleAction(action) {
       if (!reason) throw new Error('Ödül açıklaması gerekli.');
       if (confirmText !== 'ONAYLIYORUM') throw new Error('Yazılı onay gerekli.');
       await adminFetch('/api/admin/matrix/reward-all', { method: 'POST', body: JSON.stringify({ amount, reason, confirmText }) });
-      setStatus('rewardAllStatus', 'Tüm kullanıcılara ödül gönderildi.', 'ok');
+      setStatus('rewardAllStatus', 'Toplu ödül sonucu kontrol edildi.', 'ok');
       return loadDashboard();
     }
     if (action === 'promo-create') {
@@ -431,7 +493,7 @@ root.addEventListener('click', (event) => {
   if (button.id === 'runResetBtn') return handleAction('reset');
   if (button.id === 'saveMaintenanceBtn') return handleAction('save-maintenance');
   if (button.id === 'grantUserRewardBtn') return handleAction('reward-user');
-  if (button.id === 'grantAllRewardBtn') return handleAction('reward-all');
+  if (button.id === 'grantAllRewardBtn') return setStatus('rewardAllStatus', 'Toplu MC dağıtımı güvenlik ve işlem günlüğü altyapısı tamamlanana kadar devre dışıdır.', 'error');
   if (button.id === 'createPromoBtn') return handleAction('promo-create');
   if (button.id === 'runRestrictBtn') {
     const mode = selectedRestrictionAction();
@@ -458,3 +520,6 @@ root.addEventListener('click', (event) => {
   root.replaceChildren(panelDoc.body.firstElementChild);
   await loadDashboard();
 })();
+
+// Site editor is only rendered after the authorized admin dashboard is mounted.
+document.addEventListener('click', (event) => { if (event.target?.closest?.('#saveSiteContentBtn')) saveSiteContent(); });

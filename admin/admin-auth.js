@@ -11,7 +11,7 @@ const PM_ADMIN_AUTH = (() => {
   function normalizeAdminFirebaseAuthError(error) {
     const code = String(error?.code || '').trim();
     const map = {
-      'auth/configuration-not-found': 'Firebase Authentication yapılandırması playmatrixpro-b18b7 projesinde hazır değil. Authentication sağlayıcıları ve authorized domains kontrol edilmeli.',
+      'auth/configuration-not-found': 'Firebase Authentication yapılandırması playmatrix-13da1 projesinde hazır değil. Authentication sağlayıcıları ve authorized domains kontrol edilmeli.',
       'auth/network-request-failed': 'Firebase bağlantısı kurulamadı.',
       'PUBLIC_FIREBASE_CONTRACT_MISMATCH': 'Firebase public config FİREBASE RENDER kontratıyla eşleşmiyor.'
     };
@@ -43,7 +43,7 @@ const PM_ADMIN_AUTH = (() => {
 
     try {
       const [runtimeModule, firebaseAppModule, firebaseAuthModule] = await Promise.all([
-        import('/public/firebase-runtime.js'),
+        import('/public-firebase-runtime.js'),
         import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
         import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js')
       ]);

@@ -1,4 +1,4 @@
-import { preventUserInterference, initMatrixRain, setSecurityKey, getSecurityKey, clearSecurityKey, adminFetch, resolveAdminUrl } from './matrix-core.js';
+import { preventUserInterference, initMatrixRain, setSecurityKey, getSecurityKey, clearSecurityKey, adminFetch, resolveAdminUrl } from '/admin/matrix-core.js';
 
 preventUserInterference();
 initMatrixRain(document.getElementById('matrixCanvas'), { fontSize: 14 });
@@ -14,8 +14,8 @@ const state = {
   autoMode: true,
   bootstrapTried: false
 };
-const INDEX_URL = resolveAdminUrl('./index.html');
-const DASHBOARD_URL = resolveAdminUrl('./admin.html');
+const INDEX_URL = resolveAdminUrl('/admin/index.html');
+const DASHBOARD_URL = resolveAdminUrl('/admin/admin.html');
 
 const refs = {
   progress: document.getElementById('stepProgress'),

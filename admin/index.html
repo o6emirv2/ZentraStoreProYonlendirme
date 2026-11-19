@@ -2,14 +2,14 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=0.90, maximum-scale=0.90, minimum-scale=0.90, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>PlayMatrix Admin Giriş</title>
-  <link rel="stylesheet" href="./matrix-auth.css" />
-  <link rel="stylesheet" href="index.phase4-1.css" />
-  <script src="/public/playmatrix-static-runtime.js"></script>
-  <script src="/public/playmatrix-api.js"></script>
-  <script src="./admin-auth.js"></script>
-  <link rel="stylesheet" href="/public/css/phase4-inline.css" />
+  <link rel="stylesheet" href="/admin/matrix-auth.css" />
+  <link rel="stylesheet" href="/admin/index.phase4-1.css" />
+  <script src="/public-playmatrix-static-runtime.js"></script>
+  <script src="/public-playmatrix-api.js"></script>
+  <script src="/admin/admin-auth.js"></script>
+  <link rel="stylesheet" href="/public-css-phase4-inline.css" />
 </head>
 <body class="matrix-auth-body">
   <canvas id="matrixCanvas" aria-hidden="true"></canvas>
@@ -17,7 +17,7 @@
     <section class="gate-shell">
       <header class="gate-brandbar">
         <div class="gate-brand">
-          <img src="/public/assets/images/logo.png" alt="PlayMatrix" />
+          <img src="/public-assets-images-logo.png" alt="PlayMatrix" />
           <div>
             <span class="gate-kicker">PLAYMATRIX</span>
             <h1>ADMIN KONTROL MERKEZİ</h1>
@@ -96,6 +96,6 @@
       </div>
     </section>
   </main>
-  <script type="module" src="./matrix-auth.js"></script>
+  <script type="module" src="/admin/matrix-auth.js"></script>
 </body>
 </html>

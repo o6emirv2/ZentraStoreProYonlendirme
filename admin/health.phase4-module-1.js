@@ -1,4 +1,4 @@
-import { adminFetch, resolveAdminUrl, setSecurityKey } from './matrix-core.js';
+import { adminFetch, resolveAdminUrl, setSecurityKey } from '/admin/matrix-core.js';
 
     const state = { user: null, activeBase: '', admin: null };
     const $ = (id) => document.getElementById(id);
@@ -77,13 +77,13 @@ import { adminFetch, resolveAdminUrl, setSecurityKey } from './matrix-core.js';
         setBadge('healthBadge', 'Health hatası', 'error');
         setStatus(`Health isteği başarısız: ${error.message || 'Bilinmeyen hata'}`, 'error');
         if (String(error?.message || '').toLowerCase().includes('oturumu') || Number(error?.status || 0) === 401 || Number(error?.status || 0) === 403) {
-          window.setTimeout(() => window.location.replace(resolveAdminUrl('./index.html')), 900);
+          window.setTimeout(() => window.location.replace(resolveAdminUrl('/admin/index.html')), 900);
         }
       }
     }
 
     $('reloadBtn').addEventListener('click', () => loadHealth());
-    $('backBtn').addEventListener('click', () => window.location.replace(resolveAdminUrl('./admin.html')));
+    $('backBtn').addEventListener('click', () => window.location.replace(resolveAdminUrl('/admin/admin.html')));
 
     renderMetrics({});
     loadHealth();
