@@ -5,15 +5,15 @@ const compression = require('compression');
 const helmet = require('helmet');
 const cors = require('cors');
 const { Server } = require('socket.io');
-const env = require('./server/config/env');
-const { corsOptions } = require('./server/config/cors');
-const firebase = require('./server/config/firebaseAdmin');
-const { apiLimiter } = require('./server/core/security');
-const { routeData } = require('./server/core/smartDataRouter');
-const { runtimeStore } = require('./server/core/runtimeStore');
-const { globalChat, localChat, dm, presence } = require('./server/social/socialRuntimeStore');
-const { runSafeFirestoreCleanup } = require('./server/core/firestoreCleanupService');
-const { addAdminLog, sanitizeRuntimeLogPayload } = require('./server/admin/adminRuntimeLogStore');
+const env = require('./server-config-env.js');
+const { corsOptions } = require('./server-config-cors.js');
+const firebase = require('./server-config-firebaseAdmin.js');
+const { apiLimiter } = require('./server-core-security.js');
+const { routeData } = require('./server-core-smartDataRouter.js');
+const { runtimeStore } = require('./server-core-runtimeStore.js');
+const { globalChat, localChat, dm, presence } = require('./server-social-socialRuntimeStore.js');
+const { runSafeFirestoreCleanup } = require('./server-core-firestoreCleanupService.js');
+const { addAdminLog, sanitizeRuntimeLogPayload } = require('./server-admin-adminRuntimeLogStore.js');
 
 process.on('unhandledRejection', (reason) => console.error('[process:unhandledRejection]', reason && reason.stack || reason));
 process.on('uncaughtException', (error) => console.error('[process:uncaughtException]', error && error.stack || error));
@@ -83,34 +83,48 @@ app.use((req, res, next) => {
   next();
 });
 app.use(apiLimiter);
-app.use(express.static(__dirname, { extensions: ['html'], maxAge: env.nodeEnv === 'production' ? '1h' : 0, redirect: false }));
+// Serve only explicit public assets. The source root also contains server internals,
+// so serving the directory unconditionally would leak dependencies and source files.
+const staticPublic = express.static(__dirname, {
+  dotfiles: 'deny',
+  extensions: ['html'],
+  maxAge: env.nodeEnv === 'production' ? '1h' : 0,
+  redirect: false
+});
+const allowedPublicAsset = /^\/(?:$|index\.html$|script\.js$|style\.css$|favicon\.ico$|apple-touch-icon\.png$|site\.webmanifest$|(?:games|public)-[a-zA-Z0-9._-]+\.(?:js|css|html|json|png|jpg|jpeg|svg|webp|gif|ico)$|admin\/[a-zA-Z0-9._-]+\.(?:js|css|html)$)/i;
+app.use((req, res, next) => {
+  // Deny direct access to source, package metadata, environment and dependencies.
+  if (!allowedPublicAsset.test(req.path)) return next();
+  return staticPublic(req, res, next);
+});
 
-function healthPayload() { return { ok:true, service:'playmatrix', env:env.nodeEnv, firebaseEnabled: !!fb.enabled, time:Date.now() }; }
+function healthPayload() { return { ok:true, service:'playmatrix', env:env.nodeEnv, firebaseEnabled: !!fb.enabled, readiness: fb.enabled ? 'ready' : 'degraded', time:Date.now() }; }
 app.get('/healthz', (_req,res)=>res.json(healthPayload()));
 app.get('/api/healthz', (_req,res)=>res.json(healthPayload()));
 
-app.use('/api', require('./server/routes/auth.routes'));
-app.use('/api', require('./server/routes/user.routes'));
-app.use('/api', require('./server/routes/admin.routes'));
-app.use('/api', require('./server/routes/economy.routes'));
-app.use('/api', require('./server/routes/notification.routes'));
-app.use('/api', require('./server/routes/social.routes'));
-app.use('/api', require('./server/routes/email.routes'));
-app.use('/api', require('./server/routes/market.routes'));
-app.use('/api', require('./server/routes/wheel.routes'));
-app.use('/api', require('./server/routes/promo.routes'));
-app.use('/api', require('./server/routes/support.routes'));
-app.use('/api', require('./server/routes/compat.routes'));
+app.use('/api', require('./server-routes-content.routes.js'));
+app.use('/api', require('./server-routes-auth.routes.js'));
+app.use('/api', require('./server-routes-user.routes.js'));
+app.use('/api', require('./server-routes-admin.routes.js'));
+app.use('/api', require('./server-routes-economy.routes.js'));
+app.use('/api', require('./server-routes-notification.routes.js'));
+app.use('/api', require('./server-routes-social.routes.js'));
+app.use('/api', require('./server-routes-email.routes.js'));
+app.use('/api', require('./server-routes-market.routes.js'));
+app.use('/api', require('./server-routes-wheel.routes.js'));
+app.use('/api', require('./server-routes-promo.routes.js'));
+app.use('/api', require('./server-routes-support.routes.js'));
+app.use('/api', require('./server-routes-compat.routes.js'));
 
-const crashGame = require('./server/games/crash');
-const chessGame = require('./server/games/chess');
-const pistiGame = require('./server/games/pisti');
+const crashGame = require('./server-games-crash-index.js');
+const chessGame = require('./server-games-chess-index.js');
+const pistiGame = require('./server-games-pisti-index.js');
 app.use(['/api/games/crash','/api/crash'], crashGame.router);
 app.use(['/api/games/chess','/api/chess'], chessGame.router);
 app.use(['/api/games/pisti','/api/pisti-online'], pistiGame.router);
-app.use(['/api/games/snake-pro','/api/games/snake'], require('./server/games/snake-pro').router);
-app.use(['/api/games/space-pro','/api/games/space'], require('./server/games/space-pro').router);
-app.use('/api/games/pattern-master', require('./server/games/pattern-master').router);
+app.use(['/api/games/snake-pro','/api/games/snake'], require('./server-games-snake-pro-index.js').router);
+app.use(['/api/games/space-pro','/api/games/space'], require('./server-games-space-pro-index.js').router);
+app.use('/api/games/pattern-master', require('./server-games-pattern-master-index.js').router);
 
 async function captureClientError(req, res) {
   const payload = { ...(req.body || {}), path: req.body?.path || req.headers.referer || '', userAgent: req.headers['user-agent'] || '', at: Date.now() };
@@ -184,7 +198,7 @@ function sendGamePage(slug, res, next) {
   const safeSlug = gamePages[String(slug || '').toLowerCase()] || '';
   if (!safeSlug) return next();
   res.setHeader('Cache-Control', 'no-store, max-age=0');
-  return res.sendFile(path.join(__dirname, 'games', safeSlug, 'index.html'));
+  return res.sendFile(path.join(__dirname, `games-${safeSlug}-index.html`));
 }
 app.get('/games/:slug', (req, res, next) => sendGamePage(req.params.slug, res, next));
 app.get('/games/:slug/', (req, res, next) => sendGamePage(req.params.slug, res, next));
