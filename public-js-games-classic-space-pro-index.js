@@ -179,8 +179,8 @@ function pmRtNormalizeGameKey(value) {
 function pmRtGameHref(gameKey, roomId) {
     const safeRoomId = encodeURIComponent(String(roomId || '').trim());
     return gameKey === 'chess'
-        ? `/Online Oyunlar/Satranc?joinRoom=${safeRoomId}`
-        : `/Online Oyunlar/Satranc?joinRoom=${safeRoomId}`;
+        ? `/games-chess-index.html?joinRoom=${safeRoomId}`
+        : `/games-chess-index.html?joinRoom=${safeRoomId}`;
 }
 
 function pmRtSetPendingJoin(gameKey, roomId) {

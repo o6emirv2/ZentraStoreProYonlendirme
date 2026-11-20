@@ -29,6 +29,7 @@ async function hydrateFriendCounts() {
 
 function showRealtimeToast(title = 'PlayMatrix', message = '', tone = 'info', options = {}) {
   try {
+    message = window.__PM_FRIENDLY_MESSAGE__ ? window.__PM_FRIENDLY_MESSAGE__(message) : String(message || '');
     if (window.__PM_TOAST__ && typeof window.__PM_TOAST__.show === 'function') {
       window.__PM_TOAST__.show({ title, message, tone, ...options });
       return;
@@ -71,12 +72,12 @@ async function handleHostInviteAcceptedRedirect(payload = {}) {
     if (!roomId) return false;
     if (gameType.includes('chess') || gameType.includes('satran')) {
       try { localStorage.setItem('activeChessRoom', roomId); } catch (_) {}
-      window.location.href = '/Online Oyunlar/Satranc.html';
+      window.location.href = '/games-chess-index.html';
       return true;
     }
     if (gameType.includes('pisti') || gameType.includes('pişti')) {
       try { localStorage.setItem('activePistiRoom', roomId); } catch (_) {}
-      window.location.href = '/Online Oyunlar/Pisti.html';
+      window.location.href = '/games-pisti-index.html';
       return true;
     }
   } catch (_) {}

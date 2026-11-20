@@ -7,24 +7,26 @@ function clampAmount(value, { min = -1_000_000_000, max = 1_000_000_000 } = {}) 
   const n = Math.trunc(Number(value) || 0);
   return Math.max(min, Math.min(max, n));
 }
-function localBalanceKey(uid) { return `balance:${uid}`; }
-function getLocalBalance(uid) { return Math.max(0, Number(runtimeStore.temporary.get(localBalanceKey(uid)) ?? DEFAULT_BALANCE) || 0); }
-function setLocalBalance(uid, next) { runtimeStore.temporary.set(localBalanceKey(uid), Math.max(0, Math.trunc(Number(next) || 0)), 30 * 86400000); }
 async function readBalance(uid) {
   const { db } = initFirebaseAdmin();
-  if (!db) return getLocalBalance(uid);
+  if (!db) throw Object.assign(new Error('DATA_NOT_READY'),{statusCode:503});
   const snap = await db.collection('users').doc(uid).get();
-  return Math.max(0, Number((snap.exists ? snap.data().balance : DEFAULT_BALANCE) || 0));
+  if (!snap.exists) throw Object.assign(new Error('PROFILE_NOT_READY'),{statusCode:409});
+  const balance=Number(snap.data().balance);
+  if (!Number.isFinite(balance) || balance < 0) throw Object.assign(new Error('INVALID_BALANCE'),{statusCode:409});
+  return Math.floor(balance);
 }
 async function mutateBalance({ uid, amount, reason = 'economy', idempotencyKey = '', metadata = {} }) {
   if (!uid) return { ok: false, error: 'UID_REQUIRED' };
+  if (amount === undefined || amount === null || amount === '' || !Number.isFinite(Number(amount))) return {ok:false,error:'INVALID_AMOUNT'};
   const safeAmount = clampAmount(amount);
   if (!safeAmount) return { ok: true, amount: 0, balance: await readBalance(uid), reason };
+  if (!Number.isSafeInteger(safeAmount) || Math.abs(safeAmount)>1_000_000_000) return {ok:false,error:'INVALID_AMOUNT'};
   const key = String(idempotencyKey || `${uid}:${reason}:${crypto.randomUUID()}`);
   const idemMemoryKey = `idem:economy:${key}`;
   if (runtimeStore.temporary.get(idemMemoryKey)) return { ok: true, duplicate: true, balance: await readBalance(uid) };
   const { db, admin } = initFirebaseAdmin();
-  if (!db || !admin) return { ok: false, error: 'FIREBASE_UNAVAILABLE', balance: getLocalBalance(uid) };
+  if (!db || !admin) return { ok: false, error: 'DATA_NOT_READY' };
   const idemRef = db.collection('idempotency').doc(key);
   const userRef = db.collection('users').doc(uid);
   let output = null;
@@ -32,7 +34,9 @@ async function mutateBalance({ uid, amount, reason = 'economy', idempotencyKey =
     const idem = await tx.get(idemRef);
     if (idem.exists) { output = { ok: true, duplicate: true, ...(idem.data().result || {}) }; return; }
     const snap = await tx.get(userRef);
-    const current = Math.max(0, Number((snap.exists ? snap.data().balance : DEFAULT_BALANCE) || 0));
+    if (!snap.exists) throw Object.assign(new Error('PROFILE_NOT_READY'),{statusCode:409});
+    const current=Number(snap.data().balance);
+    if (!Number.isSafeInteger(current) || current<0) throw Object.assign(new Error('INVALID_BALANCE'),{statusCode:409});
     if (safeAmount < 0 && current + safeAmount < 0) throw Object.assign(new Error('INSUFFICIENT_BALANCE'), { statusCode: 409, balance: current });
     const balance = Math.max(0, current + safeAmount);
     tx.set(userRef, { balance, updatedAt: Date.now() }, { merge: true });

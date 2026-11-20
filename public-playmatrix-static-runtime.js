@@ -46,6 +46,23 @@
   window.__PM_RUNTIME.firebaseReady = true;
   window.__PLAYMATRIX_API_URL__ = normalizeBase(window.__PM_RUNTIME.apiBase || window.__PLAYMATRIX_API_URL__ || apiBase);
 
+
+  function friendlyErrorMessage(raw, fallback = 'İşlem şu anda tamamlanamadı. Lütfen kısa bir süre sonra yeniden dene.') {
+    const text = String(raw?.message || raw || '').trim();
+    const normalized = text.toLowerCase();
+    if (!text) return fallback;
+    if (/insufficient_balance|bakiye yetersiz|yetersiz bakiye/.test(normalized)) return 'Bu işlem için yeterli MC bakiyen yok. Bakiyeni kontrol edip tekrar dene.';
+    if (/auth\/invalid-credential|auth\/wrong-password|invalid_login_credentials/.test(normalized)) return 'Giriş bilgilerini kontrol edip tekrar dene.';
+    if (/auth\/email-already-in-use/.test(normalized)) return 'Bu e-posta adresiyle daha önce hesap açılmış.';
+    if (/auth\/invalid-email/.test(normalized)) return 'Geçerli bir e-posta adresi gir.';
+    if (/auth\/weak-password/.test(normalized)) return 'Daha güçlü bir şifre belirle.';
+    if (/auth\/too-many-requests/.test(normalized)) return 'Çok fazla deneme yapıldı. Bir süre sonra yeniden dene.';
+    if (/socket\.io|server|sunucu|render|firebase|firestore|grpc|not_found|internal_error|data_not_ready|profile_not_ready|network|failed to fetch|cannot read|timeout|connection|502|503|504/.test(normalized)) return 'Bağlantı kurulamadı. İnternet bağlantını kontrol edip tekrar dene.';
+    if (/^[A-Z0-9_]{5,}$/.test(text) || /^auth\//.test(text)) return fallback;
+    return text.length > 230 ? fallback : text;
+  }
+  window.__PM_FRIENDLY_MESSAGE__ = friendlyErrorMessage;
+
   const reportedClientErrors = new Map();
 
   function shouldSendClientError(type, payload) {

@@ -9,6 +9,7 @@ const env = Object.freeze({
   publicApiBase: process.env.PUBLIC_API_BASE || 'https://zentrastoreproyonlendirme.onrender.com',
   allowedOrigins: split(process.env.ALLOWED_ORIGINS || 'https://playmatrix.com.tr,https://www.playmatrix.com.tr,https://zentrastoreproyonlendirme.onrender.com,https://playmatrix-13da1.web.app,https://playmatrix-13da1.firebaseapp.com'),
   firebase: {
+    databaseId: process.env.FIRESTORE_DATABASE_ID || '(default)',
     projectId: process.env.FIREBASE_PROJECT_ID || process.env.PUBLIC_FIREBASE_PROJECT_ID || 'playmatrix-13da1',
     storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.PUBLIC_FIREBASE_STORAGE_BUCKET || 'playmatrix-13da1.firebasestorage.app',
     serviceAccount: process.env.FIREBASE_KEY || '',

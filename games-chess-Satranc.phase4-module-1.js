@@ -30,6 +30,7 @@ async function hydrateFriendCounts() {
 
 function showRealtimeToast(title = 'PlayMatrix', message = '', tone = 'info', options = {}) {
   try {
+    message = window.__PM_FRIENDLY_MESSAGE__ ? window.__PM_FRIENDLY_MESSAGE__(message) : String(message || '');
     if (window.__PM_TOAST__ && typeof window.__PM_TOAST__.show === 'function') {
       window.__PM_TOAST__.show({ title, message, tone, ...options });
       return;
@@ -834,7 +835,7 @@ Object.assign(window, { closeConfirmModal, showConfirmModal, closeMatrixModal, s
     function translateError(code = '') {
       const key = String(code || '').toUpperCase();
       const map = {
-        ROOM_FULL: 'Oda dolu.', ROOM_NOT_FOUND: 'Oda bulunamadı.', NOT_YOUR_TURN: 'Sıra sende değil.', ILLEGAL_MOVE: 'Bu hamle satranç kurallarına göre geçersiz.', INVALID_MOVE_FORMAT: 'Hamle formatı geçersiz.', INSUFFICIENT_BALANCE: 'Bakiye yetersiz.', BET_MIN_1000_MC: 'Bahisli Satranç için minimum bahis 1.000 MC.', BET_MAX_10000_MC: 'Bahisli Satranç için maksimum bahis 10.000 MC.', ALREADY_IN_ACTIVE_CHESS_ROOM: 'Zaten aktif bir Satranç odan var.', DRAW_DISABLED_FOR_BOT: 'Bot oyununda beraberlik teklifi yoktur.', ROOM_CLOSED: 'Oda kapandı.', EXTENSION_REJECTED: 'Süre uzatma reddedildi.', STATE_VERSION_MISMATCH:'Oyun verisi yenilendi. Lütfen hamleni tekrar seç.', AUTH_REQUIRED:'Oturum doğrulaması gerekiyor.', SOCKET_TIMEOUT:'Bağlantı gecikti. Hamle tekrar deneniyor.', SOCKET_OFFLINE:'Canlı bağlantı kapalı. Sunucuya yeniden bağlanılıyor.', BOT_ROOM_NOT_JOINABLE:'Bot odasına başka oyuncu katılamaz.', ROOM_NOT_PLAYING:'Oda aktif oyun durumunda değil.', NOT_IN_ROOM:'Bu odada oyuncu değilsin.'
+        ROOM_FULL: 'Oda dolu.', ROOM_NOT_FOUND: 'Oda bulunamadı.', NOT_YOUR_TURN: 'Sıra sende değil.', ILLEGAL_MOVE: 'Bu hamle satranç kurallarına göre geçersiz.', INVALID_MOVE_FORMAT: 'Hamle formatı geçersiz.', INSUFFICIENT_BALANCE: 'Bakiye yetersiz.', BET_MIN_1000_MC: 'Bahisli Satranç için minimum bahis 1.000 MC.', BET_MAX_10000_MC: 'Bahisli Satranç için maksimum bahis 10.000 MC.', ALREADY_IN_ACTIVE_CHESS_ROOM: 'Zaten aktif bir Satranç odan var.', DRAW_DISABLED_FOR_BOT: 'Bot oyununda beraberlik teklifi yoktur.', ROOM_CLOSED: 'Oda kapandı.', EXTENSION_REJECTED: 'Süre uzatma reddedildi.', STATE_VERSION_MISMATCH:'Oyun verisi yenilendi. Lütfen hamleni tekrar seç.', AUTH_REQUIRED:'Oturum doğrulaması gerekiyor.', SOCKET_TIMEOUT:'Bağlantı gecikti. Hamle tekrar deneniyor.', SOCKET_OFFLINE:'Canlı bağlantı kesildi. Yeniden bağlanılıyor.', BOT_ROOM_NOT_JOINABLE:'Bot odasına başka oyuncu katılamaz.', ROOM_NOT_PLAYING:'Oda aktif oyun durumunda değil.', NOT_IN_ROOM:'Bu odada oyuncu değilsin.'
       };
       return map[key] || String(code || 'İşlem tamamlanamadı.');
     }

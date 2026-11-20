@@ -35,7 +35,8 @@ function initFirebaseAdmin() {
   try {
     if (serviceAccount.project_id !== env.firebase.projectId) throw new Error('SERVICE_ACCOUNT_PROJECT_ID_MISMATCH');
     app = admin.apps.length ? admin.app() : admin.initializeApp({ credential: admin.credential.cert(serviceAccount), storageBucket: env.firebase.storageBucket, projectId: env.firebase.projectId });
-    db = admin.firestore();
+    const { getFirestore } = require('firebase-admin/firestore');
+    db = env.firebase.databaseId === '(default)' ? admin.firestore() : getFirestore(app, env.firebase.databaseId);
     auth = admin.auth();
     console.info('[firebase] Admin initialized for project', env.firebase.projectId);
     return { admin, app, db, auth, enabled: true };

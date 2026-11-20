@@ -17,21 +17,25 @@ let firebaseGetIdToken = null; let firebaseReload = null;      const $ = (id) =>
     function withTimeout(promise, ms, label) {       return Promise.race([promise, timeoutAfter(ms, label)]);     }      function syncRuntimeAuth() {
       window.__PM_RUNTIME = window.__PM_RUNTIME || {};       window.__PM_RUNTIME.auth = auth;     }      function createAuthUnavailableError(actionLabel = 'Bu işlem') {
       const detail = firebaseBootError?.message ? ` (${firebaseBootError.message})` : '';       return new Error(`${actionLabel} şu anda kullanılamıyor. ${AUTH_UNAVAILABLE_MESSAGE}${detail}`);     }
-    function normalizeFirebaseAuthError(error) {
-      const code = String(error?.code || '').trim();
-      const message = String(error?.message || '').trim();
-      const map = {
-        'auth/configuration-not-found': 'Firebase Authentication yapılandırması playmatrix-13da1 projesinde hazır değil. Firebase Console > Authentication bölümünde Email/Password sağlayıcısını ve Authorized domains alanında playmatrix.com.tr ile www.playmatrix.com.tr domainlerini etkinleştir.',
-        'auth/network-request-failed': 'Firebase bağlantısı kurulamadı. İnternet bağlantını kontrol edip tekrar dene.',
-        'auth/email-already-in-use': 'E-posta zaten kullanımda.',
-        'auth/wrong-password': 'Hatalı e-posta veya şifre.',
-        'auth/invalid-credential': 'Hatalı e-posta veya şifre.',
-        'auth/invalid-email': 'Geçerli bir e-posta adresi gir.',
-        'auth/weak-password': 'Şifre daha güçlü olmalı.',
-        'auth/too-many-requests': 'Çok fazla deneme yapıldı. Bir süre sonra tekrar dene.'
-      };
-      return map[code] || message || 'Firebase kimlik işlemi tamamlanamadı.';
-    }      async function bootFirebase() {
+    function publicFriendlyMessage(raw, fallback='İşlem şu anda tamamlanamadı. Lütfen biraz sonra yeniden dene.') {
+  const value=String(raw?.message || raw || '').trim();
+  if (!value) return fallback;
+  const lower=value.toLowerCase();
+  if (/insufficient_balance|yetersiz bakiye|bakiye yetersiz/i.test(value)) return 'Bu işlem için yeterli MC bakiyen bulunmuyor. Bakiyeni kontrol edip tekrar dene.';
+  if (/auth\/invalid-(credential|password)|auth\/wrong-password|invalid_login_credentials/i.test(value)) return 'E-posta adresini veya şifreni kontrol et.';
+  if (/auth\/email-already-in-use/i.test(value)) return 'Bu e-posta adresiyle daha önce hesap oluşturulmuş.';
+  if (/auth\/invalid-email/i.test(value)) return 'Lütfen geçerli bir e-posta adresi gir.';
+  if (/auth\/weak-password/i.test(value)) return 'Daha güçlü bir şifre belirle.';
+  if (/auth\/too-many-requests|too_many_attempts/i.test(value)) return 'Çok fazla deneme yapıldı. Bir süre sonra yeniden dene.';
+  if (/auth\/user-disabled/i.test(value)) return 'Bu hesabın erişimi sınırlandırılmış. Destek ekibiyle iletişime geçebilirsin.';
+  if (/data_not_ready|firebase|render|sunucu|server|firestore|grpc|internal_error|not_found|failed to fetch|network|connection|503|502|504|fetch failed|cannot read properties|timeout|aborterror|auth\/configuration-not-found/i.test(lower)) return 'Şu anda bağlantı sağlanamıyor. İnternet bağlantını kontrol edip kısa bir süre sonra yeniden dene.';
+  if (/^[A-Z][A-Z_0-9]{4,}$/.test(value) || /^auth\//.test(value)) return fallback;
+  return value.length > 260 ? fallback : value;
+}
+function normalizeFirebaseAuthError(error) {
+  return publicFriendlyMessage(error?.code || error?.message || error);
+}
+async function bootFirebase() {
       if (firebaseReady) return true;       if (firebaseBootPromise) return firebaseBootPromise;        firebaseBootPromise = (async () => {         try {
           firebaseConfig = await loadFirebaseWebConfig({ required: false, scope: 'app', timeoutMs: FIREBASE_RUNTIME_TIMEOUT_MS });           if (!firebaseConfig) {             firebaseBootError = new Error('PUBLIC_FIREBASE_CONFIG_MISSING');             return false;           }
            const [firebaseAppModule, firebaseAuthModule] = await withTimeout(Promise.all([             import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"),             import("https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js")           ]), FIREBASE_IMPORT_TIMEOUT_MS, 'FIREBASE_IMPORT_TIMEOUT');
@@ -77,7 +81,7 @@ let firebaseGetIdToken = null; let firebaseReload = null;      const $ = (id) =>
       for (let index = 0; index < orderedBases.length; index += 1) {         const base = orderedBases[index];         try {           const response = await fetchWithTimeout(`${base}${endpoint}`, { ...fetchOptions, cache: "no-store" }, fetchOptions.timeoutMs || 5000);           const canRetry = retryableStatuses.includes(response.status) && index < orderedBases.length - 1;
           if (response.ok || !canRetry) {             if (base !== API_URL) setResolvedApiBase(base);             return response;           }         } catch (error) {
           lastNetworkError = error;           if (index >= orderedBases.length - 1) throw error;         }       } 
-      if (lastNetworkError) throw lastNetworkError;       throw new Error("Sunucuyla bağlantı kurulamadı.");     }      const REF_STORAGE_KEY = "pm_pending_referral_code";
+      if (lastNetworkError) throw lastNetworkError;       throw new Error('Bağlantı sağlanamadı. İnternet bağlantını kontrol edip yeniden dene.');     }      const REF_STORAGE_KEY = "pm_pending_referral_code";
      const REWARDS = [
       { label:"10.000 MC", val:10000, color:"rgba(255,255,255,0.14)" },       { label:"20.000 MC", val:20000, color:"rgba(255,255,255,0.09)" },       { label:"25.000 MC", val:25000, color:"rgba(255,255,255,0.14)" },
       { label:"45.000 MC", val:45000, color:"rgba(255,255,255,0.09)" },       { label:"65.000 MC", val:65000, color:"rgba(255,255,255,0.14)" },       { label:"90.000 MC", val:90000, color:"rgba(255,255,255,0.09)" },
@@ -146,7 +150,7 @@ let firebaseGetIdToken = null; let firebaseReload = null;      const $ = (id) =>
     async function bootstrapServerSession(user = auth.currentUser, options = {}){       const targetUser = user || auth.currentUser;       if (!targetUser) return null;       const force = !!options.force;       const now = Date.now();       if (!force && state.sessionBootstrapBackoffUntil && now < state.sessionBootstrapBackoffUntil) return null;       if (!force && state.sessionBootstrapPromise) return state.sessionBootstrapPromise;
       const execute = async () => {         try {           const token = await getIdToken(targetUser, !!options.forceRefresh);           const headers = { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" };           await apiBaseReady;
           const response = await requestWithApiFallback("/api/auth/session/create", {             method: "POST",             headers,             credentials: "include",             cache: "no-store",
-            body: JSON.stringify({})           }, [404, 405, 502, 503, 504]);           const payload = await response.json().catch(() => ({}));           if (!response.ok || payload?.ok === false) {             const err = new Error(payload?.error || `Sunucu hatası. (${response.status})`);             err.status = response.status;             throw err;
+            body: JSON.stringify({})           }, [404, 405, 502, 503, 504]);           const payload = await response.json().catch(() => ({}));           if (!response.ok || payload?.ok === false) {             const err = new Error(publicFriendlyMessage(payload?.error || `HTTP ${response.status}`));             err.status = response.status;             throw err;
           }           storeServerSessionToken(payload);           state.sessionBootstrapAt = Date.now();           state.sessionBootstrapBackoffUntil = 0;           state.lastSessionIssueKey = "";           return payload;         } catch (error) {           const status = Number(error?.status || 0);           if (status === 503 || String(error?.message || '').includes('(503)')) {             state.sessionBootstrapBackoffUntil = Date.now() + 30000;           }           throw error;         } finally {
           if (state.sessionBootstrapPromise === promiseRef) {             state.sessionBootstrapPromise = null;           }         }       };
       const promiseRef = execute();       state.sessionBootstrapPromise = promiseRef;       return promiseRef;     } 
@@ -244,7 +248,7 @@ function getSocialRankMeta(){ return { name: "SEVİYE", className: "rank-level" 
         if (response.status === 401) {           const refreshedToken = await getIdToken(auth.currentUser, true).catch(() => "");           if (refreshedToken) {             requestOptions.headers.Authorization = `Bearer ${refreshedToken}`;             response = await requestWithApiFallback(endpoint, { ...requestOptions, cache: "no-store" });
           }         }         if (response.status === 401 && endpoint !== "/api/auth/session/create") {           const bootstrapPayload = await bootstrapServerSession(auth.currentUser, { force: true, forceRefresh: true }).catch(() => null);           if (bootstrapPayload?.ok !== false) {
             const recoveredToken = await getIdToken(auth.currentUser, true).catch(() => "");             if (recoveredToken) {               requestOptions.headers.Authorization = `Bearer ${recoveredToken}`;               response = await requestWithApiFallback(endpoint, { ...requestOptions, cache: "no-store" });             }
-          }         }       } catch {         throw new Error("Sunucuyla bağlantı kurulamadı.");       }
+          }         }       } catch {         throw new Error('Bağlantı sağlanamadı. İnternet bağlantını kontrol edip yeniden dene.');       }
        const contentType = response.headers.get("content-type") || "";       let payload = null;        if (!response.ok) {
         if (contentType.includes("application/json")) {           try { payload = await response.json(); } catch(_) {}           if (response.status === 401 && payload?.redirect) {             await forceSecureLogout(payload.error || "Oturum süren doldu.", { silent: true });             throw new Error(payload.error || "Oturum süresi doldu.");
           }           throw new Error((payload && (payload.error || payload.message)) || `Sunucu hatası. (${response.status})`);         }         if (response.status === 401) {           await forceSecureLogout("Oturum süren doldu.", { silent: true });
@@ -257,7 +261,7 @@ function getSocialRankMeta(){ return { name: "SEVİYE", className: "rank-level" 
       await apiBaseReady;       const headers = { Accept: "application/json", ...(options.headers || {}) };       if (body !== null && body !== undefined) headers["Content-Type"] = "application/json";        const fetchOptions = {
         method,         headers,         cache: "no-store",         ...options       };
        if (body !== null && body !== undefined) {         fetchOptions.body = typeof body === "string" ? body : JSON.stringify(body);       } 
-      let response;       try {         response = await requestWithApiFallback(endpoint, fetchOptions);       } catch (_) {         throw new Error("Sunucuyla bağlantı kurulamadı.");
+      let response;       try {         response = await requestWithApiFallback(endpoint, fetchOptions);       } catch (_) {         throw new Error('Bağlantı sağlanamadı. İnternet bağlantını kontrol edip yeniden dene.');
       }        const contentType = response.headers.get("content-type") || "";       let payload = null; 
       if (!response.ok) {         if (contentType.includes("application/json")) {           try { payload = await response.json(); } catch (_) {}           throw new Error((payload && (payload.error || payload.message)) || `Sunucu hatası. (${response.status})`);         }
         throw new Error(`Sunucu hatası. (${response.status})`);       }        if (!contentType.includes("application/json")) {         throw new Error("Beklenmeyen sunucu yanıtı.");
@@ -402,7 +406,7 @@ function getSocialRankMeta(){ return { name: "SEVİYE", className: "rank-level" 
      window.addEventListener("pagehide", () => {       inviteNavigationLock = false;       if (inviteNavigationResetTimer) {         window.clearTimeout(inviteNavigationResetTimer);
         inviteNavigationResetTimer = 0;       }     });      function buildSocialEmptyState(title, message) {
       const box = document.createElement("div");       box.className = "ps-empty-state";        const titleEl = document.createElement("strong");       titleEl.textContent = title;
-       const messageEl = document.createElement("div");       messageEl.textContent = message;        box.append(titleEl, messageEl);
+       const messageEl = document.createElement("div");       messageEl.textContent = publicFriendlyMessage(message, String(message || 'Bilgilendirme'));        box.append(titleEl, messageEl);
       return box;     }      function buildSocialActionState(title, message, actionText = "Tekrar dene", onAction = null, tone = "") {       const box = buildSocialEmptyState(title, message);
       if (tone) box.dataset.tone = tone;       if (typeof onAction === "function") {         const actions = document.createElement("div");         actions.className = "ps-inline-actions ps-inline-actions--compact";         const button = document.createElement("button");
         button.type = "button";         button.className = "btn btn-primary";         button.textContent = actionText;         button.addEventListener("click", onAction);         actions.appendChild(button);
@@ -873,7 +877,7 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
       function formatRatingValue(value){       return Math.max(100, Math.round(Number(value) || 1000));     }
      function showToast(title, message, tone = "info"){       const icons = {         success: "fa-circle-check",         error: "fa-circle-exclamation",
         info: "fa-circle-info"       };       const { toast, body } = createToastBase({         tone,         iconClass: icons[tone] || icons.info,
-        title       });       const messageEl = document.createElement("div");       messageEl.className = "toast-message";       messageEl.textContent = message;
+        title       });       const messageEl = document.createElement("div");       messageEl.className = "toast-message";       messageEl.textContent = window.__PM_FRIENDLY_MESSAGE__ ? window.__PM_FRIENDLY_MESSAGE__(message) : publicFriendlyMessage(message);
       body.appendChild(messageEl);       appendToast(toast, 4200);     }      function playSound(kind = "tap"){
       if (!state.soundEnabled) return;       try {         const AudioContextRef = window.AudioContext || window.webkitAudioContext;         if (!AudioContextRef) return;         const audio = new AudioContextRef();
         const now = audio.currentTime;         const master = audio.createGain();         master.gain.value = 0.025;         master.connect(audio.destination); 
@@ -991,20 +995,12 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
       setHomeWidgetStatus("homeStatsStatus", "ready", auth.currentUser ? "Canlı hesap verisi" : "Misafir görünümü");
       if (statusText) statusText.title = options.updatedLabel || composeHomepageOverviewModel(data || {}).statsUpdatedLabel;
     }
-function buildHeroPromoSlides(overview = {}) {
-      const ladder = String(overview.activityValueHtml || '').split(/<br\s*\/?\s*>/i).filter(Boolean).map((line) => stripHtml(line));       return [         {           key: 'signup',           theme: 'violet',
-          icon: 'fa-plus',           chip: 'Hemen Tanımlanır',           eyebrow: overview.signupTitle || 'Yeni Üyelik Bonusu',           titleHtml: overview.signupAmountHtml || '<b>1.000 MC</b> Anında',           meta: overview.signupMeta || 'Hesabın Açılır Açılmaz Tanımlanır.'
-        },         {           key: 'email',           theme: 'cyan',           icon: 'fa-envelope-open-text',
-          chip: 'Doğrulama Sonrası',           eyebrow: overview.emailTitle || 'E-posta Onay Ödülü',           titleHtml: overview.emailAmountHtml || '<b>2.000 MC</b> Anında',           meta: overview.emailMeta || 'Onay Sonrası Çark ve Promo Aktif Olur.'         },
-        {           key: 'games',           theme: 'gold',           icon: 'fa-gamepad',           chip: 'Oyunları Keşfet',
-          eyebrow: 'PlayMatrix Oyun Dünyası',           titleHtml: '<b>Altı Farklı Oyun</b> Tek Platform',
-          meta: 'Satranç, Pişti, Crash ve üç refleks oyununu keşfet. Gerçek para kullanılmaz.' }
-      ];     }      function stopHeroCarouselAutoplay() {       if (heroCarouselState.timer) {
+function stopHeroCarouselAutoplay() {       if (heroCarouselState.timer) {
         clearTimeout(heroCarouselState.timer);         heroCarouselState.timer = 0;       }     } 
     function scheduleHeroCarouselAutoplay() {       stopHeroCarouselAutoplay();       if (document.hidden) return;       if ((heroCarouselState.slides || []).length <= 1) return;       if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;       heroCarouselState.timer = window.setTimeout(() => {
         setHeroCarouselIndex(heroCarouselState.index + 1, { resetTimer: true });       }, heroCarouselState.autoplayMs);     }      function recalcHeroCarouselMetrics() {
       const track = $('heroPromoTrack');       if (!track) return;       const firstSlide = track.querySelector('.hero-slide');       if (!firstSlide) {         heroCarouselState.slideSpan = 0;
-        return;       }       const trackStyles = window.getComputedStyle(track);       const gap = parseFloat(trackStyles.columnGap || trackStyles.gap || '14') || 14;       heroCarouselState.slideSpan = firstSlide.getBoundingClientRect().width + gap;
+        return;       }       const trackStyles = window.getComputedStyle(track);       const gap = Number.parseFloat(trackStyles.columnGap || trackStyles.gap || '0');       heroCarouselState.slideSpan = firstSlide.getBoundingClientRect().width + (Number.isFinite(gap) ? gap : 0);
     }      function applyHeroCarouselPosition(offset = null, animate = true) {       const track = $('heroPromoTrack');       if (!track) return;
       recalcHeroCarouselMetrics();       const targetOffset = Number.isFinite(offset) ? offset : heroCarouselState.index * heroCarouselState.slideSpan;       track.classList.toggle('is-dragging', !animate);       track.style.transform = `translate3d(${-targetOffset}px, 0, 0)`;     }
      function updateHeroCarouselDots() {       const dots = document.querySelectorAll('#heroPromoDots .hero-slider-dot');       dots.forEach((dot, index) => {         const isActive = index === heroCarouselState.index;
@@ -1022,25 +1018,57 @@ function buildHeroPromoSlides(overview = {}) {
       }, { passive: true });        const finishTouch = () => {         if (!heroCarouselState.touchActive) return;         const threshold = Math.max(48, (heroCarouselState.slideSpan || 0) * 0.16);
         const deltaX = touchLastX - touchStartX;         heroCarouselState.touchActive = false;         heroCarouselState.dragOffset = 0;         if (Math.abs(deltaX) > threshold) {           setHeroCarouselIndex(heroCarouselState.index + (deltaX < 0 ? 1 : -1), { animate: true, resetTimer: true });
         } else {           applyHeroCarouselPosition(null, true);           scheduleHeroCarouselAutoplay();         }       };
-       viewport.addEventListener('touchend', finishTouch, { passive: true });       viewport.addEventListener('touchcancel', finishTouch, { passive: true });        dots.addEventListener('click', (event) => {
+       viewport.addEventListener('touchend', finishTouch, { passive: true });       viewport.addEventListener('touchcancel', finishTouch, { passive: true });        const gallery = $('heroPromoCarousel');
+      gallery?.addEventListener('click', (event) => {
+        const prev = event.target.closest('.pm-slide-prev');
+        const next = event.target.closest('.pm-slide-next');
+        if (prev || next) {
+          setHeroCarouselIndex(heroCarouselState.index + (next ? 1 : -1), { resetTimer:true });
+          return;
+        }
+        const action = event.target.closest('[data-pm-slide-action]');
+        if (!action) return;
+        if (action.dataset.pmSlideAction === 'register') {
+          $('registerBtn')?.click();
+        } else if (action.dataset.pmSlideAction === 'verify') {
+          if (!auth?.currentUser) $('loginBtn')?.click();
+          else $('navProfileItem')?.click();
+        }
+      });
+      gallery?.addEventListener('mouseenter', stopHeroCarouselAutoplay);
+      gallery?.addEventListener('mouseleave', scheduleHeroCarouselAutoplay);
+      gallery?.addEventListener('focusin', stopHeroCarouselAutoplay);
+      gallery?.addEventListener('focusout', (event) => {
+        if (!gallery.contains(event.relatedTarget)) scheduleHeroCarouselAutoplay();
+      });
+      gallery?.addEventListener('keydown', (event) => {
+        if (event.target.matches('input,textarea,select')) return;
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          event.preventDefault();
+          setHeroCarouselIndex(heroCarouselState.index + (event.key === 'ArrowRight' ? 1 : -1), {resetTimer:true});
+        }
+      });
+      dots.addEventListener('click', (event) => {
         const button = event.target.closest('.hero-slider-dot');         if (!button) return;         const nextIndex = Number(button.dataset.slideIndex || 0) || 0;         setHeroCarouselIndex(nextIndex, { animate: true, resetTimer: true });       });
        window.addEventListener('resize', () => {         recalcHeroCarouselMetrics();         applyHeroCarouselPosition(null, true);       }, { passive: true });
        document.addEventListener('visibilitychange', () => {         if (document.hidden) stopHeroCarouselAutoplay();         else scheduleHeroCarouselAutoplay();       });
-    }      function renderHeroPromoCarousel(overview = {}) {       const track = $('heroPromoTrack');       const dots = $('heroPromoDots');
-      if (!track || !dots) return;       const slides = buildHeroPromoSlides(overview);       heroCarouselState.slides = slides;       const slideFragment = document.createDocumentFragment();       slides.forEach((slide) => {
-        const article = document.createElement('article');         article.className = 'hero-slide';         article.dataset.theme = String(slide.theme || 'violet');         const glow = document.createElement('div');         glow.className = 'hero-slide-glow';
-        const content = document.createElement('div');         content.className = 'hero-slide-content';         const top = document.createElement('div');         top.className = 'hero-slide-top';         const icon = document.createElement('div');
-        icon.className = 'hero-slide-icon';         icon.appendChild(createFaIcon(slide.icon || 'fa-gift'));         const chip = createTextElement('span', 'hero-slide-chip', slide.chip || '');         top.append(icon, chip);         const copy = document.createElement('div');
-        copy.className = 'hero-slide-copy';         copy.appendChild(createTextElement('div', 'hero-slide-eyebrow', slide.eyebrow || ''));         const title = document.createElement('h3');         title.className = 'hero-slide-title';         appendSafeInlineMarkup(title, slide.titleHtml || slide.title || '');
-        copy.appendChild(title);         copy.appendChild(createTextElement('div', 'hero-slide-meta', slide.meta || ''));         if (Array.isArray(slide.ladder) && slide.ladder.length) {           const ladder = document.createElement('div');           ladder.className = 'hero-slide-ladder';
-          slide.ladder.forEach((line) => {             const clean = stripHtml(line);             const parts = clean.split('Oyuncuya');             const rank = (parts[0] || '').trim();             const amount = (parts[1] || '').trim();
-            const row = document.createElement('div');             row.className = 'hero-slide-row';             row.append(createTextElement('span', 'hero-slide-rank', rank ? rank + ' Oyuncu' : 'Oyuncu'), createTextElement('span', 'hero-slide-value', amount));             ladder.appendChild(row);           });
-          copy.appendChild(ladder);         }         content.append(top, copy);         article.append(glow, content);         slideFragment.appendChild(article);
-      });       track.replaceChildren(slideFragment);       const dotFragment = document.createDocumentFragment();       slides.forEach((slide, index) => {         const button = document.createElement('button');
-        button.className = 'hero-slider-dot' + (index === heroCarouselState.index ? ' is-active' : '');         button.type = 'button';         button.setAttribute('aria-label', `${stripHtml(slide.eyebrow || 'Promosyon')} slaytına git`);         button.setAttribute('aria-current', index === heroCarouselState.index ? 'true' : 'false');         button.dataset.slideIndex = String(index);
-        dotFragment.appendChild(button);       });       dots.replaceChildren(dotFragment);       bindHeroCarousel();       const count = slides.length || 1;
-      heroCarouselState.index = Math.min(heroCarouselState.index, count - 1);       requestAnimationFrame(() => {         recalcHeroCarouselMetrics();         applyHeroCarouselPosition(null, true);         updateHeroCarouselDots();
-        scheduleHeroCarouselAutoplay();       });     }     function updateSystemOverview(){
+    }      function renderHeroPromoCarousel() {
+  const track = $('heroPromoTrack');
+  const dots = $('heroPromoDots');
+  if (!track || !dots) return;
+  heroCarouselState.slides = [...track.querySelectorAll('.hero-slide')];
+  const count = heroCarouselState.slides.length;
+  if (!count) return;
+  heroCarouselState.index = Math.min(heroCarouselState.index, count - 1);
+  bindHeroCarousel();
+  requestAnimationFrame(() => {
+    recalcHeroCarouselMetrics();
+    applyHeroCarouselPosition(null, false);
+    updateHeroCarouselDots();
+    scheduleHeroCarouselAutoplay();
+  });
+}
+function updateSystemOverview(){
       const data = state.userData = normalizeApiUser(state.userData || {});
       const overview = composeHomepageOverviewModel(data);
       setOverviewText("heroRewardBadge", overview.heroRewardBadge);
@@ -1373,9 +1401,13 @@ function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = c
       } catch(_) {         $("usernameHelp").textContent = "";         $("usernameHelp").className = "field-help";       }     }
      async function submitAuth(){       const email = ($("authEmail").value || "").trim();       const password = $("authPassword").value || "";       $("authHelp").textContent = "";
       $("authHelp").className = "field-help";        try {         if (state.authMode === "login") {           if (!email || !password) throw new Error("E-posta veya kullanıcı adı ve şifre zorunlu.");
-          const resolvedEmail = await resolveLoginIdentifier(email);           await signInWithEmailAndPassword(auth, resolvedEmail, password);           const bootstrapPayload = await bootstrapServerSession(auth.currentUser, { force: true, forceRefresh: true });           if (!bootstrapPayload || bootstrapPayload.ok === false) {             throw new Error("Sunucu oturumu hazırlanamadı.");
+          const resolvedEmail = await resolveLoginIdentifier(email);           await signInWithEmailAndPassword(auth, resolvedEmail, password);           const bootstrapPayload = await bootstrapServerSession(auth.currentUser, { force: true, forceRefresh: true });           if (!bootstrapPayload || bootstrapPayload.ok === false) {             throw new Error('Giriş işlemi tamamlanamadı. Lütfen yeniden dene.');
           }           showToast("Giriş başarılı", "Oturum açıldı.", "success");           closeSheet();         } else {           const fullName = ($("authFullName").value || "").trim();
-          const username = ($("authUsername").value || "").trim();           if (!fullName || !username || !email || !password) throw new Error("Tüm alanları doldur.");           const credential = await createUserWithEmailAndPassword(auth, email, password);           await sendEmailVerification(credential.user);           await refreshAuthVerificationState(true);           const profilePayload = await syncProfileUpdateWithRetry({ fullName, username, avatar: AVATARS[0] }, { attempts: 3, forceRefresh: true });           if (!profilePayload?.user?.username) throw new Error("Profil kayıt senkronizasyonu tamamlanamadı.");           showToast("Hesap oluşturuldu", "Profilin kaydedildi ve doğrulama bağlantısı e-posta adresine gönderildi.", "success");           closeSheet();         }
+          const username = ($("authUsername").value || "").trim();           if (!fullName || !username || !email || !password) throw new Error("Tüm alanları doldur.");           const credential = await createUserWithEmailAndPassword(auth, email, password);           let verificationSent = false;
+          try { await sendEmailVerification(credential.user); verificationSent = true; }
+          catch (verificationError) { console.warn('[auth:verification-email]',verificationError?.code||verificationError); }
+          await refreshAuthVerificationState(true);
+          const profilePayload = await syncProfileUpdateWithRetry({ fullName, username, avatar: AVATARS[0] }, { attempts: 3, forceRefresh: true });           if (!profilePayload?.user?.username) throw new Error("Profil kayıt senkronizasyonu tamamlanamadı.");           showToast("Hesap oluşturuldu", verificationSent ? "Profilin kaydedildi. Doğrulama bağlantısı e-posta adresine gönderildi." : "Profilin kaydedildi. Doğrulama mesajı gönderilemedi; hesabım bölümünden yeniden isteyebilirsin.", verificationSent ? "success" : "info");           closeSheet();         }
       } catch (error) {         const message = normalizeFirebaseAuthError(error);         $("authHelp").textContent = message;
         $("authHelp").className = "field-help is-error";       }     }      async function forgotPassword(){
       const email = ($("forgotEmail").value || "").trim();       try {         if (!email) throw new Error("E-posta adresi zorunlu.");         await sendPasswordResetEmail(auth, email);         $("forgotHelp").textContent = "Sıfırlama bağlantısı gönderildi.";
@@ -1442,7 +1474,7 @@ function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = c
         });       });        bindIfPresent("gameSearch", "input", renderGames); 
       window.addEventListener("scroll", updateMobileTabs, { passive:true });       window.addEventListener("scroll", revealFadeUps, { passive:true });       window.addEventListener("resize", revealFadeUps, { passive:true });     } 
     function isTransientApiBootstrapError(error) {       const message = String(error?.message || '').toLowerCase();       return message.includes('404')         || message.includes('405')         || message.includes('502')
-        || message.includes('503')         || message.includes('504')         || message.includes('firebase admin')         || message.includes('credential')         || message.includes('hazır değil')         || message.includes('hazir degil')         || message.includes('sunucuyla bağlantı kurulamadı')         || message.includes('fetch')         || message.includes('network');
+        || message.includes('503')         || message.includes('504')         || message.includes('firebase admin')         || message.includes('credential')         || message.includes('hazır değil')         || message.includes('hazir degil')         || message.includes('bağlantı sağlanamadılamadı')         || message.includes('fetch')         || message.includes('network');
     }      onAuthStateChanged(auth, async (user) => {       state.authBootAttemptedAt = Date.now();       if (state.authBootInFlight) return;
       state.authBootInFlight = true;       try {         if (user) {           state.authStatus = "syncing";           state.authReady = false;           const bootstrapPayload = await bootstrapServerSession(user, { force: true, forceRefresh: true });
           if (!bootstrapPayload || bootstrapPayload.ok === false) {             throw new Error('Sunucu oturumu hazırlanamadı.');           }           state.authReady = true;           state.authStatus = "authenticated";           await loadUserData();
@@ -1450,7 +1482,7 @@ function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = c
           state.authReady = false;           state.authStatus = "guest";           stopActivityHeartbeat();           disconnectRealtime({ preserveIntent: false });           state.userData = null;                     state.friends = { accepted: [], incoming: [], outgoing: [], counts: { accepted:0, incoming:0, outgoing:0, online:0 } };
           state.lobbyMessages = [];           resetSocialState();           safeExecute('render social hub (guest)', renderSocialHub);           safeExecute('update user shell (guest)', updateUserShell);           safeExecute('verify button (guest)', syncVerifyButtonState);
         }       } catch (error) {         console.error('[PlayMatrix] auth state flow', error);         if (user) {           if (isTransientApiBootstrapError(error)) {
-            state.authReady = false;             state.authStatus = "degraded";             stopActivityHeartbeat();             disconnectRealtime({ preserveIntent: false });             notifySessionIssueOnce('Sunucu bağlantısı', 'Hesap verileri geçici olarak yüklenemedi. Sayfayı yenileyip tekrar dene.', 'warning');             safeExecute('update user shell (degraded)', updateUserShell);
+            state.authReady = false;             state.authStatus = "degraded";             stopActivityHeartbeat();             disconnectRealtime({ preserveIntent: false });             notifySessionIssueOnce('Bağlantı durumu', 'Hesap verileri geçici olarak yüklenemedi. Sayfayı yenileyip tekrar dene.', 'warning');             safeExecute('update user shell (degraded)', updateUserShell);
           } else {             await forceSecureLogout(error?.message || 'Oturum hazırlanamadı.', { silent: false });           }         }       } finally {
         state.authBootInFlight = false;         safeExecute('render games after auth', renderGames);         await Promise.resolve(loadLeaderboard()).catch((error) => console.error('[PlayMatrix] leaderboard after auth', error));         safeExecute('mobile tabs after auth', updateMobileTabs);       }
     });      document.addEventListener("mousemove", (event) => {       document.documentElement.style.setProperty("--mx", `${(event.clientX / window.innerWidth) * 100}%`);       document.documentElement.style.setProperty("--my", `${(event.clientY / window.innerHeight) * 100}%`);

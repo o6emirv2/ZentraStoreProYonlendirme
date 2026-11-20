@@ -204,7 +204,7 @@ const crashNoticeTimers = new Map();
         const icon = document.createElement('i');
         icon.className = `fa-solid ${crashNoticeIconByType[safeType] || crashNoticeIconByType.info}`;
         const body = document.createElement('span');
-        body.textContent = `${title ? `${title}: ` : ''}${message || ''}`.trim();
+        body.textContent = `${title ? `${title}: ` : ''}${window.__PM_FRIENDLY_MESSAGE__ ? window.__PM_FRIENDLY_MESSAGE__(message) : (message || '')}`.trim();
         el.append(icon, body);
         el.classList.remove('is-success','is-error','is-warning');
         if (['success','cashout','xp','invite'].includes(safeType)) el.classList.add('is-success');
@@ -1048,7 +1048,7 @@ function setBootActions({ showEnter = false, showRetry = false, enterLabel = 'CR
         const boxKey = getBoxKey(box);
         const bet = myBets[boxKey];
         if (!bet || bet.cashed) return;
-        showCrashNotice({ type: 'system', title: 'Çıkış', message: 'Bozdurma isteği sunucuya gönderildi.', scope: `box${box}`, duration: 2200 });
+        showCrashNotice({ type: 'system', title: 'Çıkış', message: 'Bozdurma isteğin alındı, sonuç güncelleniyor.', scope: `box${box}`, duration: 2200 });
         const payload = await api('/api/crash/cashout', 'POST', { box });
         if (!payload?.ok) throw new Error(payload?.error || 'Çıkış alınamadı.');
         const serverBet = payload.bet ? normalizeServerBet({ ...payload.bet, isMine: true }) : null;
@@ -1433,12 +1433,12 @@ async function connectStream() {
 
             socket.on('connect_error', () => {
                 crashStreamReady = false;
-                renderCrashRuntimeNotice('Canlı akış şu an kurulamıyor. Socket.IO otomatik olarak yeniden bağlanacak.', 'warning', 'Tekrar Dene', () => connectStream().catch(() => null));
+                renderCrashRuntimeNotice('Canlı akış şu an kurulamıyor. Otomatik olarak yeniden bağlanılacak.', 'warning', 'Tekrar Dene', () => connectStream().catch(() => null));
             });
 
             socket.on('disconnect', () => {
                 crashStreamReady = false;
-                renderCrashRuntimeNotice('Canlı akış bağlantısı geçici olarak koptu. Socket.IO otomatik olarak yeniden bağlanıyor.', 'warning', 'Tekrar Dene', () => connectStream().catch(() => null));
+                renderCrashRuntimeNotice('Canlı akış bağlantısı geçici olarak koptu. Bağlantı otomatik olarak yenileniyor.', 'warning', 'Tekrar Dene', () => connectStream().catch(() => null));
             });
         }
 
