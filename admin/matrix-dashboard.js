@@ -58,7 +58,7 @@ function panelTemplate() {
         <section class="panel stack">
           <div>
             <h2>TOPLU DURUM SIFIRLAMA</h2>
-            <p class="lead">Bakiye, seviye, aylık aktiflik, XP ve aktiflik puanı alanlarını kontrollü biçimde sıfırlayın.</p>
+            <p class="lead">Bakiye, seviye, aylık aktiflik ve aktiflik puanı alanlarını kontrollü biçimde yönetin.</p>
           </div>
           <div class="check-grid" id="resetFieldGrid"></div>
           <div class="confirm-box">
@@ -327,7 +327,7 @@ async function loadSiteContent() {
       const input = document.getElementById(`site-${type}-${key}`);
       if (input && typeof payload?.content?.[type]?.[key] === 'string') input.value = payload.content[type][key];
     }
-    if (payload.persisted === false) setStatus('siteContentStatus', 'Varsayılan içerik yüklendi. Değişiklikleri kaydetmek için Firebase bağlantısı gereklidir.');
+    if (payload.persisted === false) setStatus('siteContentStatus', 'Varsayılan içerik yüklendi. Düzenlemeler şu anda kaydedilemiyor.');
   } catch (error) { setStatus('siteContentStatus', error.message, 'error'); }
 }
 async function saveSiteContent() {
@@ -363,7 +363,7 @@ async function loadDashboard() {
 
   const resetLabels = [
     ['balance', 'Bakiye'], ['accountLevel', 'Seviye'], ['monthlyActiveScore', 'Aylık Aktiflik'],
-    ['accountXp', 'XP'], ['activityScore', 'Aktiflik Puanı']
+    ['activityScore', 'Aktiflik Puanı']
   ];
   replaceWithChildren(document.getElementById('resetFieldGrid'), resetLabels.map(([value, label]) => buildResetOption(value, label)));
 

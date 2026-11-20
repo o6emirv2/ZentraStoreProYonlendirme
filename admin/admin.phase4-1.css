@@ -1,3 +1,31 @@
 html,body{margin:0;min-height:100%;background:#030608;color:#f4f6ef;}
     body{overflow-x:hidden;}
     html.pm-admin-guarded body{visibility:hidden;}
+
+
+/* Layout refinements for mobile and tablet management */
+*,*::before,*::after{box-sizing:border-box}
+html,body{max-width:100%;overflow-x:hidden}
+button,input,textarea,select{max-width:100%}
+button{min-height:44px;touch-action:manipulation}
+:focus-visible{outline:3px solid #a9eaff;outline-offset:2px}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+@media(max-width:1100px){.summary-strip{grid-template-columns:repeat(3,minmax(0,1fr))}.layout-grid-3,.layout-hero{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){
+ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
+ .summary-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+ .summary-pill{min-height:85px;padding:11px;min-width:0}
+ .summary-pill .value{font-size:clamp(17px,5vw,25px);overflow-wrap:anywhere}
+ .layout-hero,.layout-grid-2,.layout-grid-3,.field-grid,.issue-columns,.maintenance-grid{grid-template-columns:minmax(0,1fr)!important;gap:12px}
+ .panel{padding:14px}
+ .top-actions,.action-row{display:flex;flex-wrap:wrap;gap:8px}
+ .top-actions>*{flex:1 1 auto}
+ .field-grid>*{min-width:0}
+ button{white-space:normal;height:auto;padding:12px 14px;min-height:44px}
+ .table-wrap{max-width:100%;margin:0}
+ table{min-width:620px}
+ input,select,textarea{font-size:16px}
+ .maintenance-toggle{flex-wrap:wrap}
+}
+@media(max-width:390px){.summary-strip{grid-template-columns:1fr 1fr}.summary-pill{padding:9px}.panel{padding:11px}}
+@media(prefers-reduced-motion:reduce){button{transition:none!important}}
