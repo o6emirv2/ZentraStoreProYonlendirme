@@ -5,6 +5,7 @@ const { debitBalance, creditBalance, readBalance } = require('./server-core-econ
 const { getProgression } = require('./server-core-progressionService.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
+const { isDataUnavailable, diagnose } = require('./server-core-dataReadiness.js');
 
 const router = express.Router();
 
@@ -131,7 +132,7 @@ function validateRiskTable(rows = [], { useDefaultOnInvalid = false } = {}) {
 }
 
 async function loadRiskTable() {
-  if (state.riskLoaded) return state.risk;
+  if (state.riskLoaded && (!state.riskRetryAt || Date.now() < state.riskRetryAt)) return state.risk;
   if (state.riskLoadPromise) return state.riskLoadPromise;
   state.riskLoadPromise = (async () => {
     try {
@@ -140,9 +141,12 @@ async function loadRiskTable() {
         const snap = await db.collection(RISK_DOC_COLLECTION).doc(RISK_DOC_ID).get();
         const parsed = validateRiskTable((snap.exists ? snap.data() : null)?.riskTable || [], { useDefaultOnInvalid: false });
         if (parsed.ok) state.risk = parsed.rows;
+        state.riskRetryAt = 0;
       }
     } catch (error) {
-      console.error('[crash:risk-table:load:error]', JSON.stringify({ message: error.message }));
+      state.riskRetryAt = Date.now() + 60_000;
+      if (isDataUnavailable(error)) diagnose(error, 'crash-risk-table');
+      else console.warn('[crash:risk-table:load:degraded]', JSON.stringify({message:String(error.message||error).slice(0,180)}));
     } finally {
       state.riskLoaded = true;
       state.riskLoadPromise = null;
@@ -546,7 +550,7 @@ router.post('/bet', requireAuth, async (req, res, next) => {
     const existing = state.bets.get(key);
     if (existing) return res.json({ ok: true, duplicate: true, bet: publicBet(existing, uid), balance: await readBalance(uid), roundId: state.roundId });
     const debit = await debitBalance({ uid, amount, reason: 'crash-bet', idempotencyKey: `crash:bet:${key}`, metadata: { roundId: state.roundId, box, autoCashout } });
-    if (!debit.ok) return res.status(409).json(debit);
+    if (!debit.ok) return res.status(debit.error === 'DATA_NOT_READY' ? 503 : 409).json(debit);
     const profile = await readCrashProfile(req).catch(() => ({ username: safeDisplayName(req.user), avatar: '' }));
     const bet = { betId: key, roundId: state.roundId, uid, username: profile.username || safeDisplayName(req.user), avatar: safeAvatarUrl(profile.avatar || profile.photoURL || ''), box, amount, autoCashout, cashed: false, lost: false, refunded: false, refunding: false, cashingOut: false, settlementPending: false, winAmount: 0, cashoutMult: 0, at: now() };
     state.bets.set(key, bet);

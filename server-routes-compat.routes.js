@@ -72,6 +72,7 @@ async function grantEmailVerifyRewardIfNeeded(req, uid, profile = {}) {
     const snap = await tx.get(ref);
     const current = snap.exists ? snap.data() : {};
     if (current.emailVerifyRewardClaimed) return;
+    if (!snap.exists) throw Object.assign(new Error('PROFILE_NOT_READY'),{statusCode:409});
     tx.set(ref, { emailVerified: true, emailVerifyRewardClaimed: true, emailVerifyRewardAt: now(), balance: admin.firestore.FieldValue.increment(EMAIL_VERIFICATION_MC), updatedAt: now() }, { merge: true });
     tx.set(db.collection('audit').doc(`email_verify_${uid}`), { uid, amount: EMAIL_VERIFICATION_MC, reason: 'email-verified-reward', at: now() }, { merge: true });
   });
@@ -82,15 +83,22 @@ async function readProfile(req, uid = uidOf(req), seed = {}) {
   const safeUid = uid || 'guest';
   let profile = defaultProfile(req, safeUid, seed);
   const { db } = fb();
-  if (!db && uid) return addProgression({ ...profile, balance:0, firebaseUnavailable:true });
+  if (!db && uid) throw Object.assign(new Error('DATA_NOT_READY'),{statusCode:503});
   if (db && uid) {
     const ref = db.collection('users').doc(uid);
     const snap = await ref.get();
     if (snap.exists) profile = { ...profile, ...snap.data(), uid };
-    else await ref.create(profile).catch(async (error) => { if (error.code !== 6 && error.code !== 'already-exists') throw error; });
+    else {
+      try { await ref.create(profile); }
+      catch (error) {
+        if (error.code !== 6 && error.code !== 'already-exists') throw error;
+        const latest=await ref.get();
+        if (!latest.exists) throw Object.assign(new Error('PROFILE_NOT_READY'),{statusCode:409});
+        profile={...profile,...latest.data(),uid};
+      }
+    }
   }
-  const memoryBalance = runtimeStore.temporary.get(`balance:${safeUid}`);
-  if (typeof memoryBalance === 'number') profile.balance = memoryBalance;
+  // Account balance is exclusively persisted. Never substitute stale process-local MC.
   const memoryStats = runtimeStore.temporary.get(`gameStats:${safeUid}`);
   if (memoryStats && typeof memoryStats === 'object') {
     profile.gameStats = { ...(profile.gameStats || {}), ...memoryStats, total: { ...((profile.gameStats || {}).total || {}), ...(memoryStats.total || {}) } };
@@ -104,13 +112,15 @@ async function addBalance(uid, amount, reason, key) {
   const { db, admin } = fb();
   const safeAmount = Math.floor(Number(amount) || 0);
   if (!uid || !safeAmount) return { ok: true, amount: safeAmount, reason, firestore: false };
-  if (!db || !admin) return { ok: false, error: 'FIREBASE_UNAVAILABLE' };
+  if (!db || !admin) return { ok: false, error: 'DATA_NOT_READY' };
   return runOnce({ key, db, execute: async () => {
     const userRef = db.collection('users').doc(uid);
     let nextBalance = 0;
     await db.runTransaction(async (tx) => {
       const snap = await tx.get(userRef);
-      const current = Math.max(0, Number((snap.exists ? snap.data().balance : 0) || 0));
+      if (!snap.exists) throw Object.assign(new Error('PROFILE_NOT_READY'),{statusCode:409});
+      const current=Number(snap.data().balance);
+      if (!Number.isSafeInteger(current) || current<0) throw Object.assign(new Error('INVALID_BALANCE'),{statusCode:409});
       if (safeAmount < 0 && current + safeAmount < 0) throw Object.assign(new Error('INSUFFICIENT_BALANCE'), { statusCode: 409, current });
       nextBalance = Math.max(0, current + safeAmount);
       tx.set(userRef, { balance: nextBalance, updatedAt: now() }, { merge: true });

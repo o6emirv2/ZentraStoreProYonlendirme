@@ -13,6 +13,8 @@ const { routeData } = require('./server-core-smartDataRouter.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const { globalChat, localChat, dm, presence } = require('./server-social-socialRuntimeStore.js');
 const { runSafeFirestoreCleanup } = require('./server-core-firestoreCleanupService.js');
+const { protectAsyncRoutes } = require('./server-core-asyncRoutes.js');
+const dataReadiness = require('./server-core-dataReadiness.js');
 const { addAdminLog, sanitizeRuntimeLogPayload } = require('./server-admin-adminRuntimeLogStore.js');
 
 process.on('unhandledRejection', (reason) => console.error('[process:unhandledRejection]', reason && reason.stack || reason));
@@ -98,33 +100,33 @@ app.use((req, res, next) => {
   return staticPublic(req, res, next);
 });
 
-function healthPayload() { return { ok:true, service:'playmatrix', env:env.nodeEnv, firebaseEnabled: !!fb.enabled, readiness: fb.enabled ? 'ready' : 'degraded', time:Date.now() }; }
+function healthPayload() { const status=dataReadiness.readiness(); return { ok:true, service:'playmatrix', env:env.nodeEnv, firebaseEnabled: !!fb.enabled, dataReady:status.ready, readiness:fb.enabled && status.ready ? 'ready' : 'degraded', time:Date.now() }; }
 app.get('/healthz', (_req,res)=>res.json(healthPayload()));
 app.get('/api/healthz', (_req,res)=>res.json(healthPayload()));
 
-app.use('/api', require('./server-routes-content.routes.js'));
-app.use('/api', require('./server-routes-auth.routes.js'));
-app.use('/api', require('./server-routes-user.routes.js'));
-app.use('/api', require('./server-routes-admin.routes.js'));
-app.use('/api', require('./server-routes-economy.routes.js'));
-app.use('/api', require('./server-routes-notification.routes.js'));
-app.use('/api', require('./server-routes-social.routes.js'));
-app.use('/api', require('./server-routes-email.routes.js'));
-app.use('/api', require('./server-routes-market.routes.js'));
-app.use('/api', require('./server-routes-wheel.routes.js'));
-app.use('/api', require('./server-routes-promo.routes.js'));
-app.use('/api', require('./server-routes-support.routes.js'));
-app.use('/api', require('./server-routes-compat.routes.js'));
+app.use('/api', protectAsyncRoutes(require('./server-routes-content.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-auth.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-user.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-admin.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-economy.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-notification.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-social.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-email.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-market.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-wheel.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-promo.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-support.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-compat.routes.js')));
 
 const crashGame = require('./server-games-crash-index.js');
 const chessGame = require('./server-games-chess-index.js');
 const pistiGame = require('./server-games-pisti-index.js');
-app.use(['/api/games/crash','/api/crash'], crashGame.router);
-app.use(['/api/games/chess','/api/chess'], chessGame.router);
-app.use(['/api/games/pisti','/api/pisti-online'], pistiGame.router);
-app.use(['/api/games/snake-pro','/api/games/snake'], require('./server-games-snake-pro-index.js').router);
-app.use(['/api/games/space-pro','/api/games/space'], require('./server-games-space-pro-index.js').router);
-app.use('/api/games/pattern-master', require('./server-games-pattern-master-index.js').router);
+app.use(['/api/games/crash','/api/crash'], protectAsyncRoutes(crashGame.router));
+app.use(['/api/games/chess','/api/chess'], protectAsyncRoutes(chessGame.router));
+app.use(['/api/games/pisti','/api/pisti-online'], protectAsyncRoutes(pistiGame.router));
+app.use(['/api/games/snake-pro','/api/games/snake'], protectAsyncRoutes(require('./server-games-snake-pro-index.js').router));
+app.use(['/api/games/space-pro','/api/games/space'], protectAsyncRoutes(require('./server-games-space-pro-index.js').router));
+app.use('/api/games/pattern-master', protectAsyncRoutes(require('./server-games-pattern-master-index.js').router));
 
 async function captureClientError(req, res) {
   const payload = { ...(req.body || {}), path: req.body?.path || req.headers.referer || '', userAgent: req.headers['user-agent'] || '', at: Date.now() };
@@ -292,18 +294,37 @@ pistiGame.installSocket?.(io);
 setInterval(()=>{ Object.values(runtimeStore).forEach(store => store.prune && store.prune()); }, 60_000).unref();
 
 (async () => {
+  const latest = firebase.initFirebaseAdmin();
+  const available = await dataReadiness.verifyDataReady(latest.db);
+  if (!available) return;
+  // Destructive maintenance must never run merely because the web service restarted.
+  if (process.env.FIRESTORE_CLEANUP_ENABLED !== '1') return;
   try {
-    const latest = firebase.initFirebaseAdmin();
-    const dryRun = process.env.FIRESTORE_CLEANUP_DRY_RUN !== '0' || process.env.FIRESTORE_CLEANUP_ENABLED !== '1';
+    const dryRun = process.env.FIRESTORE_CLEANUP_DRY_RUN !== '0';
     const report = await runSafeFirestoreCleanup({ db: latest.db, dryRun, limit: 100 });
-    console.info('[firebase:cleanup]', JSON.stringify({ ...report, legacyFields: Array.isArray(report.legacyFields) ? report.legacyFields.length : 0 }));
+    console.info('[data:cleanup]', JSON.stringify({ ...report, legacyFields: Array.isArray(report.legacyFields) ? report.legacyFields.length : 0 }));
   } catch (error) {
-    console.error('[firebase:cleanup:error]', { message: error.message });
+    dataReadiness.diagnose(error, 'cleanup');
   }
 })();
 
 app.use((req,res)=>res.status(404).json({ ok:false, error:'NOT_FOUND' }));
-app.use((err,req,res,next)=>{ const status = Number(err?.statusCode || 500) || 500; const game = resolveGameScopeFromPath(req.originalUrl || req.url); if (status >= 500) { const row = { id:`server_${Date.now()}_${Math.random().toString(36).slice(2)}`, scope:'server.error', game, area: game === 'chess' ? 'Satranç Backend' : game === 'crash' ? 'Crash Backend' : game === 'home' ? 'AnaSayfa Backend' : 'Sunucu', error:err?.message || String(err), message:err?.message || String(err), reason:'Backend exception oluştu.', solution:'Render logundaki stack trace ile ilgili route/modül kontrol edilmeli.', stack:String(err?.stack || '').slice(0,2000), path:req.originalUrl || req.url, method:req.method, status, createdAt:Date.now(), severity:'error' }; runtimeStore.errors.set(row.id, row, 24*3600000); console.error('[server:error]', JSON.stringify({ message: row.message, stack: row.stack, path: row.path, method: row.method, game: row.game })); } res.status(status).json({ ok:false, error: status >= 500 ? (err.message === 'INSUFFICIENT_BALANCE' ? 'INSUFFICIENT_BALANCE' : 'INTERNAL_ERROR') : (err?.message || 'REQUEST_REJECTED') }); });
+app.use((error, req, res, _next) => {
+  const dataIssue = dataReadiness.isDataUnavailable(error) || error?.message === 'DATA_NOT_READY';
+  const status = dataIssue ? 503 : (Number(error?.statusCode || 500) || 500);
+  const code = dataIssue ? 'DATA_NOT_READY' : status === 409 && error?.message === 'INSUFFICIENT_BALANCE' ? 'INSUFFICIENT_BALANCE' : status >= 500 ? 'INTERNAL_ERROR' : String(error?.message || 'REQUEST_REJECTED');
+  if (dataIssue) {
+    dataReadiness.diagnose(error, 'request');
+  } else if (status >= 500) {
+    const scope=resolveGameScopeFromPath(req.originalUrl || req.url);
+    const row={id:`api_${Date.now()}_${Math.random().toString(36).slice(2)}`,scope:'server.error',game:scope,message:String(error?.message||'Internal error').slice(0,400),stack:String(error?.stack||'').slice(0,1600),method:req.method,path:req.originalUrl||req.url,status,createdAt:Date.now(),severity:'error'};
+    runtimeStore.errors.set(row.id,row,24*3600000);
+    console.error('[api:error]',JSON.stringify({code,path:row.path,method:row.method,status,game:row.game,message:row.message}));
+  }
+  if (res.headersSent) return;
+  return res.status(status).json({ok:false,error:code,message: dataIssue ? 'İşlemin şu anda tamamlanamıyor. Lütfen biraz sonra yeniden dene.' : undefined});
+});
+
 const port = Number(process.env.PORT || 3000);
 if (require.main === module) server.listen(port, () => console.log(`[playmatrix] listening on ${port}`));
 module.exports = { app, server, io };
