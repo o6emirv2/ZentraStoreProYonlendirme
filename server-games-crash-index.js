@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { requireAuth, requireAdmin } = require('./server-core-security.js');
 const { debitBalance, creditBalance, readBalance } = require('./server-core-economyService.js');
-const { getProgression, normalizeXpBigInt } = require('./server-core-progressionService.js');
+const { getProgression } = require('./server-core-progressionService.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
 
@@ -18,9 +18,6 @@ const MAX_AUTO_CASHOUT = 100;
 const TICK_MS = 80;
 const STATE_EMIT_MIN_MS = 120;
 let lastStateEmitAt = 0;
-const XP_UNIT_MC = 1000;
-const XP_PER_UNIT = 10;
-const MIN_MANUAL_XP_CASHOUT_MULT = 1.50;
 const RISK_DOC_COLLECTION = 'gameConfig';
 const RISK_DOC_ID = 'crash';
 
@@ -267,138 +264,59 @@ async function readCrashProfile(req) {
   };
 }
 
-function crashXpForAmount(amount) {
-  const units = Math.floor(Math.max(0, Number(amount) || 0) / XP_UNIT_MC);
-  return units * XP_PER_UNIT;
-}
-
-function buildXpDecision(bet, { outcome = 'loss', cashoutMult = 0, automatic = false } = {}) {
-  const amount = Number(bet?.amount || 0) || 0;
-  const baseXp = crashXpForAmount(amount);
-  let eligible = baseXp > 0;
-  let reason = eligible ? 'CRASH_MC_USAGE_XP' : 'MINIMUM_1000_MC_REQUIRED';
-  if (outcome === 'cashout' && !automatic && Number(cashoutMult || 0) < MIN_MANUAL_XP_CASHOUT_MULT) {
-    eligible = false;
-    reason = 'MANUAL_CASHOUT_BELOW_1_50_NO_XP';
-  }
-  return {
-    eligible,
-    xpAwarded: eligible ? baseXp : 0,
-    reason,
-    rule: `${XP_UNIT_MC} MC = ${XP_PER_UNIT} XP`,
-    minimumManualCashoutForXp: MIN_MANUAL_XP_CASHOUT_MULT
-  };
-}
-
-async function awardCrashXp(bet, options = {}) {
-  if (!bet || !bet.uid) return { ok: false, xpAwarded: 0, reason: 'BET_OR_UID_MISSING', progression: getProgression(0) };
-  if (bet.xpSettled) return bet.xpResult || { ok: true, duplicate: true, xpAwarded: 0, reason: 'ALREADY_SETTLED', progression: getProgression(0) };
-  const decision = buildXpDecision(bet, options);
-  const idempotencyKey = `crash:xp:${bet.roundId}:${bet.uid}:${bet.box}`;
-  let output = {
-    ok: true,
-    idempotencyKey,
-    outcome: options.outcome || 'loss',
-    automatic: !!options.automatic,
-    cashoutMult: round(options.cashoutMult || 0, 2),
-    amount: bet.amount,
-    ...decision,
-    progression: null,
-    levelUp: false
+// Save match statistics without any gameplay XP or level progression mutations.
+async function recordCrashStats(bet, options = {}) {
+  if (!bet?.uid) return { ok: false, error: 'UID_REQUIRED' };
+  if (bet.statsSettled) return bet.statsResult || { ok: true, duplicate: true };
+  const key = `crash:stats:${bet.roundId}:${bet.uid}:${bet.box}`;
+  const outcome = options.outcome === 'cashout' ? 'win' : 'loss';
+  const updateStats = (stats = {}) => {
+    const prev = stats.crash || {};
+    const total = stats.total || {};
+    const crash = {
+      ...prev,
+      rounds: Number(prev.rounds || 0) + 1,
+      wins: Number(prev.wins || 0) + (outcome === 'win' ? 1 : 0),
+      losses: Number(prev.losses || 0) + (outcome === 'loss' ? 1 : 0),
+      totalBet: Number(prev.totalBet || 0) + Number(bet.amount || 0),
+      totalCashout: Number(prev.totalCashout || 0) + Number(bet.winAmount || 0),
+      bestMultiplier: Math.max(Number(prev.bestMultiplier || 0), Number(options.cashoutMult || 0))
+    };
+    crash.winRatePct = crash.rounds ? Math.round((crash.wins / crash.rounds) * 1000) / 10 : 0;
+    const global = {
+      ...total,
+      rounds: Number(total.rounds || 0) + 1,
+      wins: Number(total.wins || 0) + (outcome === 'win' ? 1 : 0),
+      losses: Number(total.losses || 0) + (outcome === 'loss' ? 1 : 0)
+    };
+    global.winRatePct = global.rounds ? Math.round((global.wins / global.rounds) * 1000) / 10 : 0;
+    return { ...stats, crash, total: global };
   };
   try {
     const { db } = initFirebaseAdmin();
-    const outcomeKey = options.outcome === 'cashout' ? 'win' : 'loss';
-    const xpToAdd = Math.max(0, Math.trunc(Number(output.xpAwarded || 0)));
     if (!db) {
-      const key = `xp:${bet.uid}`;
-      const current = normalizeXpBigInt(runtimeStore.temporary.get(key) || 0);
-      const next = current + BigInt(xpToAdd);
-      runtimeStore.temporary.set(key, next.toString(), 30 * 86400000);
+      if (runtimeStore.temporary.get(`idem:${key}`)) return { ok: true, duplicate: true };
       const statsKey = `gameStats:${bet.uid}`;
-      const stats = runtimeStore.temporary.get(statsKey) || { total: {}, crash: {} };
-      const crash = stats.crash || {};
-      const total = stats.total || {};
-      const patchCrash = {
-        ...crash,
-        rounds: Number(crash.rounds || 0) + 1,
-        wins: Number(crash.wins || 0) + (outcomeKey === 'win' ? 1 : 0),
-        losses: Number(crash.losses || 0) + (outcomeKey === 'loss' ? 1 : 0),
-        totalBet: Number(crash.totalBet || 0) + Number(bet.amount || 0),
-        totalCashout: Number(crash.totalCashout || 0) + Number(bet.winAmount ?? bet.payout ?? 0),
-        bestMultiplier: Math.max(Number(crash.bestMultiplier || 0), Number(options.cashoutMult || 0))
-      };
-      patchCrash.winRatePct = patchCrash.rounds ? Math.round((patchCrash.wins / patchCrash.rounds) * 1000) / 10 : 0;
-      const patchTotal = {
-        ...total,
-        rounds: Number(total.rounds || 0) + 1,
-        wins: Number(total.wins || 0) + (outcomeKey === 'win' ? 1 : 0),
-        losses: Number(total.losses || 0) + (outcomeKey === 'loss' ? 1 : 0)
-      };
-      patchTotal.winRatePct = patchTotal.rounds ? Math.round((patchTotal.wins / patchTotal.rounds) * 1000) / 10 : 0;
-      runtimeStore.temporary.set(statsKey, { ...stats, crash: patchCrash, total: patchTotal }, 30 * 86400000);
-      output.progression = getProgression(next);
+      runtimeStore.temporary.set(statsKey, updateStats(runtimeStore.temporary.get(statsKey) || {}), 30 * 86400000);
+      runtimeStore.temporary.set(`idem:${key}`, true, 30 * 86400000);
     } else {
-      const userRef = db.collection('users').doc(bet.uid);
-      const idemRef = db.collection('idempotency').doc(idempotencyKey);
-      await db.runTransaction(async (tx) => {
-        const idem = await tx.get(idemRef);
-        if (idem.exists) {
-          output = { ...output, duplicate: true, ...(idem.data().result || {}) };
-          return;
-        }
-        const snap = await tx.get(userRef);
+      const ref = db.collection('users').doc(bet.uid);
+      const idem = db.collection('idempotency').doc(key);
+      await db.runTransaction(async tx => {
+        if ((await tx.get(idem)).exists) return;
+        const snap = await tx.get(ref);
         const data = snap.exists ? (snap.data() || {}) : {};
-        const current = normalizeXpBigInt(data.accountXp ?? data.xp ?? 0);
-        const before = getProgression(current);
-        const next = current + BigInt(xpToAdd);
-        const progression = getProgression(next);
-        const gameStats = data.gameStats && typeof data.gameStats === 'object' ? data.gameStats : {};
-        const crash = gameStats.crash && typeof gameStats.crash === 'object' ? gameStats.crash : {};
-        const total = gameStats.total && typeof gameStats.total === 'object' ? gameStats.total : {};
-        const patchCrash = {
-          ...crash,
-          rounds: Number(crash.rounds || 0) + 1,
-          wins: Number(crash.wins || 0) + (outcomeKey === 'win' ? 1 : 0),
-          losses: Number(crash.losses || 0) + (outcomeKey === 'loss' ? 1 : 0),
-          totalBet: Number(crash.totalBet || 0) + Number(bet.amount || 0),
-          totalCashout: Number(crash.totalCashout || 0) + Number(bet.winAmount ?? bet.payout ?? 0),
-          bestMultiplier: Math.max(Number(crash.bestMultiplier || 0), Number(options.cashoutMult || 0))
-        };
-        patchCrash.winRatePct = patchCrash.rounds ? Math.round((patchCrash.wins / patchCrash.rounds) * 1000) / 10 : 0;
-        const patchTotal = {
-          ...total,
-          rounds: Number(total.rounds || 0) + 1,
-          wins: Number(total.wins || 0) + (outcomeKey === 'win' ? 1 : 0),
-          losses: Number(total.losses || 0) + (outcomeKey === 'loss' ? 1 : 0)
-        };
-        patchTotal.winRatePct = patchTotal.rounds ? Math.round((patchTotal.wins / patchTotal.rounds) * 1000) / 10 : 0;
-        output.progression = progression;
-        output.levelBefore = before.accountLevel;
-        output.levelAfter = progression.accountLevel;
-        output.levelUp = progression.accountLevel > before.accountLevel;
-        tx.set(userRef, {
-          xp: progression.xp,
-          accountXp: progression.currentXp,
-          accountLevel: progression.accountLevel,
-          level: progression.accountLevel,
-          accountLevelProgressPct: progression.accountLevelProgressPct,
-          progression,
-          gameStats: { ...gameStats, crash: patchCrash, total: patchTotal },
-          monthlyActiveScore: Number(data.monthlyActiveScore || 0) + 1,
-          updatedAt: now()
-        }, { merge: true });
-        tx.set(idemRef, { key: idempotencyKey, type: 'crash-xp', uid: bet.uid, createdAt: now(), result: output }, { merge: false });
+        tx.set(ref, { gameStats: updateStats(data.gameStats || {}), monthlyActiveScore: Number(data.monthlyActiveScore || 0) + 1, updatedAt: now() }, { merge: true });
+        tx.create(idem, { key, uid: bet.uid, type: 'crash-stats', createdAt: now() });
       });
     }
+    bet.statsSettled = true;
+    bet.statsResult = { ok: true };
+    return bet.statsResult;
   } catch (error) {
-    console.error('[crash:xp:error]', JSON.stringify({ message: error.message, uid: bet.uid, roundId: bet.roundId, box: bet.box }));
-    output.ok = false;
-    output.error = 'XP_SETTLEMENT_FAILED';
+    console.error('[crash:stats:error]', error?.message);
+    return { ok: false, error: 'STATS_PERSISTENCE_FAILED' };
   }
-  bet.xpSettled = true;
-  bet.xpResult = output;
-  return output;
 }
 
 function publicBet(bet, viewerUid = '') {
@@ -424,8 +342,6 @@ function publicBet(bet, viewerUid = '') {
     win: bet.winAmount || 0,
     settlementPending: !!bet.settlementPending,
     cashoutMode: bet.cashoutMode || '',
-    xpAwarded: bet.xpResult?.xpAwarded || 0,
-    xpResult: isMine ? (bet.xpResult || null) : (bet.xpResult ? { xpAwarded: bet.xpResult.xpAwarded || 0, reason: bet.xpResult.reason || '' } : null),
     roundId: bet.roundId
   };
 }
@@ -512,7 +428,7 @@ async function settleLosses() {
     if (!bet.cashed && !bet.refunded && !bet.cashingOut && !bet.refunding) {
       clearAutoTimer(bet);
       bet.lost = true;
-      bet.xpResult = await awardCrashXp(bet, { outcome: 'loss' });
+      await recordCrashStats(bet, { outcome: 'loss' });
     }
   }
 }
@@ -537,8 +453,8 @@ async function cashoutBet(bet, { automatic = false, forcedMultiplier = null } = 
   if (bet.refunded) return { ok: false, error: 'BET_REFUNDED', statusCode: 409 };
   if (bet.refunding) return { ok: false, error: 'REFUND_IN_PROGRESS', statusCode: 409 };
   if (bet.lost) return { ok: false, error: 'BET_ALREADY_LOST', statusCode: 409 };
-  if (bet.cashed) return { ok: true, duplicate: true, bet, balance: bet.balance ?? await readBalance(bet.uid), xpResult: bet.xpResult || null };
-  if (bet.cashingOut) return { ok: true, pending: true, bet, balance: bet.balance ?? await readBalance(bet.uid), xpResult: bet.xpResult || null };
+  if (bet.cashed) return { ok: true, duplicate: true, bet, balance: bet.balance ?? await readBalance(bet.uid) };
+  if (bet.cashingOut) return { ok: true, pending: true, bet, balance: bet.balance ?? await readBalance(bet.uid) };
   if (state.phase !== 'FLYING') return { ok: false, error: 'CASHOUT_NOT_AVAILABLE', statusCode: 409 };
   const liveMult = currentMultiplier();
   const requestedMult = forcedMultiplier !== null ? round(forcedMultiplier, 2) : liveMult;
@@ -567,9 +483,9 @@ async function cashoutBet(bet, { automatic = false, forcedMultiplier = null } = 
     bet.balance = result.balance;
     bet.settlementPending = false;
     bet.cashingOut = false;
-    bet.xpResult = await awardCrashXp(bet, { outcome: 'cashout', cashoutMult: mult, automatic });
+    await recordCrashStats(bet, { outcome: 'cashout', cashoutMult: mult });
     emitState({ force: true });
-    return { ok: true, bet, balance: result.balance, xpResult: bet.xpResult };
+    return { ok: true, bet, balance: result.balance };
   } catch (error) {
     bet.cashed = false;
     bet.settlementPending = false;
@@ -632,7 +548,7 @@ router.post('/bet', requireAuth, async (req, res, next) => {
     const debit = await debitBalance({ uid, amount, reason: 'crash-bet', idempotencyKey: `crash:bet:${key}`, metadata: { roundId: state.roundId, box, autoCashout } });
     if (!debit.ok) return res.status(409).json(debit);
     const profile = await readCrashProfile(req).catch(() => ({ username: safeDisplayName(req.user), avatar: '' }));
-    const bet = { betId: key, roundId: state.roundId, uid, username: profile.username || safeDisplayName(req.user), avatar: safeAvatarUrl(profile.avatar || profile.photoURL || ''), box, amount, autoCashout, cashed: false, lost: false, refunded: false, refunding: false, cashingOut: false, settlementPending: false, xpSettled: false, xpResult: null, winAmount: 0, cashoutMult: 0, at: now() };
+    const bet = { betId: key, roundId: state.roundId, uid, username: profile.username || safeDisplayName(req.user), avatar: safeAvatarUrl(profile.avatar || profile.photoURL || ''), box, amount, autoCashout, cashed: false, lost: false, refunded: false, refunding: false, cashingOut: false, settlementPending: false, winAmount: 0, cashoutMult: 0, at: now() };
     state.bets.set(key, bet);
     emitState({ force: true });
     res.json({ ok: true, bet: publicBet(bet, uid), balance: debit.balance, roundId: state.roundId });
@@ -646,11 +562,7 @@ router.post('/cashout', requireAuth, async (req, res, next) => {
     const result = await cashoutBet(state.bets.get(`${state.roundId}:${uid}:${box}`));
     if (!result.ok) return res.status(result.statusCode || 409).json({ ok: false, error: result.error });
     const cashed = result.bet;
-    const xp = result.xpResult || cashed.xpResult || null;
-    const xpMessage = xp?.xpAwarded > 0
-      ? ` +${xp.xpAwarded} XP işlendi.`
-      : (xp?.reason === 'MANUAL_CASHOUT_BELOW_1_50_NO_XP' ? ' XP verilmedi: manuel çıkışta minimum 1.50x gerekir.' : '');
-    res.json({ ok: true, bet: publicBet(cashed, uid), winAmount: cashed.winAmount, cashoutMult: cashed.cashoutMult, balance: result.balance, xpAwarded: xp?.xpAwarded || 0, xpResult: xp, progression: xp?.progression || null, resultSummary: { type: 'cashout', message: `${cashed.cashoutMult.toFixed(2)}x çıkış alındı.${xpMessage}`, xpResult: xp } });
+    res.json({ ok: true, bet: publicBet(cashed, uid), winAmount: cashed.winAmount, cashoutMult: cashed.cashoutMult, balance: result.balance, resultSummary: { type: 'cashout', message: `${cashed.cashoutMult.toFixed(2)}x çıkış alındı.` } });
   } catch (error) { if (error.statusCode) return res.status(error.statusCode).json({ ok: false, error: error.message }); next(error); }
 });
 router.post('/refund-active', requireAuth, async (req, res, next) => {

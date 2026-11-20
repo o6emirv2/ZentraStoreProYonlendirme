@@ -1189,7 +1189,7 @@
   .auto-row .auto-icon-btn{ width:38px !important; min-width:38px !important; }
 }
 
-/* Crash final cashout / XP / notification UI patch */
+/* Crash cashout and notification UI */
 .round-hud{
   right: clamp(12px, 2.5vw, 24px) !important;
   width: auto !important;
@@ -1283,7 +1283,6 @@
 .action-btn.btn-lost{ background:linear-gradient(180deg, #555c6b 0%, #303644 100%) !important; color:#f4f6fb !important; border-color:rgba(255,255,255,.08) !important; }
 .action-btn.btn-lost span{ color:#c8d0de !important; }
 .stat-bar-fill{ transition: width .62s cubic-bezier(.22,1,.36,1), box-shadow .42s ease, filter .42s ease; }
-.stat-bar-fill.xp-pulse{ box-shadow:0 0 18px rgba(0,255,163,.55), 0 0 34px rgba(0,255,163,.22); filter:saturate(1.35) brightness(1.2); }
 @media (max-width: 767px){
   .crash-hud-notice{ flex-basis:100%; max-width:100%; min-height:34px; border-radius:14px; white-space:normal; }
   .auto-row{ grid-template-columns:42px minmax(128px, 1fr) minmax(126px, 47%) !important; gap:7px !important; }

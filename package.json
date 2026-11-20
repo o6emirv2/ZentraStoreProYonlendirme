@@ -1,6 +1,6 @@
 {
   "name": "playmatrix-flat-root",
-  "version": "12.0.0",
+  "version": "12.1.0",
   "private": true,
   "type": "commonjs",
   "description": "PlayMatrix root-flat games/public/server source layout, Firebase Hosting and Render API",

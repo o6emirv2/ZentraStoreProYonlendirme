@@ -185,7 +185,6 @@ const crashNoticeTimers = new Map();
         error: 'fa-triangle-exclamation',
         warning: 'fa-circle-exclamation',
         invite: 'fa-gamepad',
-        xp: 'fa-star',
         cashout: 'fa-sack-dollar',
         loss: 'fa-burst',
         system: 'fa-circle-info',
@@ -194,7 +193,7 @@ const crashNoticeTimers = new Map();
 
     function normalizeNoticeType(type = 'info') {
         const raw = String(type || 'info').toLowerCase();
-        if (['success','error','warning','invite','xp','cashout','loss','system','info'].includes(raw)) return raw;
+        if (['success','error','warning','invite','cashout','loss','system','info'].includes(raw)) return raw;
         return 'info';
     }
 
@@ -573,8 +572,6 @@ function setBootActions({ showEnter = false, showRetry = false, enterLabel = 'CR
         if (elUiAccountLevelBar) {
             elUiAccountLevelBar.style.width = accountProgress + '%';
             if (animate) {
-                elUiAccountLevelBar.classList.add('xp-pulse');
-                setTimeout(() => elUiAccountLevelBar?.classList.remove('xp-pulse'), 900);
             }
         }
         if (elUiAccountLevelPct) elUiAccountLevelPct.innerText = `${accountProgress.toFixed(1)}%`;
@@ -824,8 +821,6 @@ function setBootActions({ showEnter = false, showRetry = false, enterLabel = 'CR
             refunded: !!data.refunded,
             cashingOut: !!data.cashingOut,
             settlementPending: !!data.settlementPending,
-            xpAwarded: Number(data.xpAwarded ?? data.xpResult?.xpAwarded ?? 0) || 0,
-            xpResult: data.xpResult || null,
             win: Number(data.win || 0) || 0,
             cashoutMult: Number(data.cashoutMult || 0) || 0
         };
@@ -908,16 +903,14 @@ function setBootActions({ showEnter = false, showRetry = false, enterLabel = 'CR
             if (bet && String(bet.roundId || '') === String(currentRoundId || '') && bet.cashed) {
                 setButtonMode(btn, 'success');
                 const mult = Number(bet.cashoutMult || 0) || 0;
-                const xp = Number(bet.xpAwarded ?? bet.xpResult?.xpAwarded ?? 0) || 0;
-                btn.innerHTML = `ÇIKIŞ ALINDI <span>${mult > 0 ? mult.toFixed(2) + 'x' : ''}${xp > 0 ? ` • +${xp} XP` : ''}</span>`;
+                btn.innerHTML = `ÇIKIŞ ALINDI <span>${mult > 0 ? mult.toFixed(2) + 'x' : ''}</span>`;
                 btn.disabled = true;
                 setBoxStatus(box, bet.settlementPending ? 'Bakiye işleniyor' : 'Çıkış alındı', bet.settlementPending ? 'processing' : 'ready');
                 return;
             }
             if (bet && String(bet.roundId || '') === String(currentRoundId || '') && bet.lost) {
                 setButtonMode(btn, 'lost');
-                const xp = Number(bet.xpAwarded ?? bet.xpResult?.xpAwarded ?? 0) || 0;
-                btn.innerHTML = `KAYBETTİ <span>${xp > 0 ? `+${xp} XP` : 'Tur kapandı'}</span>`;
+                btn.innerHTML = 'KAYBETTİ <span>Tur kapandı</span>';
                 btn.disabled = true;
                 setBoxStatus(box, 'Tur kaybedildi', 'closed');
                 return;
@@ -1041,21 +1034,14 @@ function setBootActions({ showEnter = false, showRetry = false, enterLabel = 'CR
     }
 
     function applyCrashProgressionFromPayload(payload = {}, { animate = true } = {}) {
-        const progression = payload?.progression || payload?.xpResult?.progression || payload?.resultSummary?.xpResult?.progression;
+        const progression = payload?.progression;
         if (!progression || typeof progression !== 'object') return;
         applyCrashProgression({ progression, accountLevel: progression.accountLevel ?? progression.level, accountLevelProgressPct: progression.accountLevelProgressPct ?? progression.progressPercent }, { animate });
     }
 
     function showCrashResultSummary(summary, { box = 0 } = {}) {
         if (!summary || typeof summary !== 'object') return;
-        const xp = summary.xpResult || null;
-        const message = summary.message || 'Tur sonucu işlendi.';
-        showCrashNotice({ type: summary.type === 'loss' ? 'loss' : 'cashout', title: summary.type === 'loss' ? 'Tur sonucu' : 'Kazanç', message, scope: box ? `box${box}` : 'hud', duration: 5200 });
-        if (xp?.xpAwarded > 0) {
-            showCrashNotice({ type: 'xp', title: 'XP', message: `+${xp.xpAwarded} XP hesabına işlendi.`, scope: 'hud', duration: 5200 });
-        } else if (xp?.reason === 'MANUAL_CASHOUT_BELOW_1_50_NO_XP') {
-            showCrashNotice({ type: 'warning', title: 'XP verilmedi', message: 'Manuel çıkışta XP için minimum 1.50x gerekir.', scope: 'hud', duration: 5600 });
-        }
+        showCrashNotice({ type: summary.type === 'loss' ? 'loss' : 'cashout', title: summary.type === 'loss' ? 'Tur sonucu' : 'Kazanç', message: summary.message || 'Tur sonucu işlendi.', scope: box ? `box${box}` : 'hud', duration: 5200 });
     }
 
     async function cashOut(box) {
@@ -1138,25 +1124,18 @@ function setBootActions({ showEnter = false, showRetry = false, enterLabel = 'CR
         if (!player?.isMine) return;
         const box = Number(player.box) === 2 ? 2 : 1;
         const keyBase = `${player.roundId || currentRoundId}:${box}`;
-        const xp = player.xpResult || null;
         if (player.cashed) {
-            const key = `${keyBase}:cashed:${player.cashoutMult || 0}:${xp?.xpAwarded || 0}`;
+            const key = `${keyBase}:cashed:${player.cashoutMult || 0}`;
             if (seenOutcomeNotices.has(key)) return;
             seenOutcomeNotices.add(key);
             const mult = Number(player.cashoutMult || 0) || 0;
             const win = Number(player.win ?? player.winAmount ?? 0) || 0;
-            const xpText = xp?.xpAwarded > 0 ? ` • +${xp.xpAwarded} XP` : (xp?.reason === 'MANUAL_CASHOUT_BELOW_1_50_NO_XP' ? ' • XP için minimum 1.50x gerekir' : '');
-            showCrashNotice({ type: 'cashout', title: 'Çıkış alındı', message: `${mult.toFixed(2)}x • +${formatCompactMc(win)}${xpText}`, scope: `box${box}`, duration: 5600 });
-            if (xp?.progression) applyCrashProgressionFromPayload({ xpResult: xp }, { animate: true });
-            return;
-        }
-        if (player.lost) {
-            const key = `${keyBase}:lost:${xp?.xpAwarded || 0}`;
+            showCrashNotice({ type: 'cashout', title: 'Çıkış alındı', message: `${mult.toFixed(2)}x • +${formatCompactMc(win)}`, scope: `box${box}`, duration: 5600 });
+        } else if (player.lost) {
+            const key = `${keyBase}:lost`;
             if (seenOutcomeNotices.has(key)) return;
             seenOutcomeNotices.add(key);
-            const xpText = xp?.xpAwarded > 0 ? ` +${xp.xpAwarded} XP işlendi.` : ' XP oluşmadı.';
-            showCrashNotice({ type: 'loss', title: 'Tur patladı', message: `Bahis kaybedildi.${xpText}`, scope: `box${box}`, duration: 5600 });
-            if (xp?.progression) applyCrashProgressionFromPayload({ xpResult: xp }, { animate: true });
+            showCrashNotice({ type: 'loss', title: 'Tur patladı', message: 'Bahis kaybedildi.', scope: `box${box}`, duration: 5600 });
         }
     }
 

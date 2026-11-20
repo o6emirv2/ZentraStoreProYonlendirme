@@ -911,10 +911,6 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
       const rewardPolicy = getRewardPolicy(safeData) || {};
       const systemOverview = safeData?.systemOverview && typeof safeData.systemOverview === "object" ? safeData.systemOverview : null;
       const chatSummary = systemOverview?.chatPolicy?.summaryLabel || getChatPolicySummary(safeData);
-      const activityLadder = Array.isArray(rewardPolicy?.monthlyActive?.ladder) ? rewardPolicy.monthlyActive.ladder : [50000, 20000, 10000, 5000, 2500];
-      const activityLines = activityLadder.length
-        ? activityLadder.map((amount, index) => `${index + 1}. Oyuncuya <b>${formatRewardAmountLabel(amount)}</b>`).join("<br>")
-        : "İlk 5 oyuncu aylık aktiflik ödülü kazanır.";
       const signupLabel = rewardPolicy?.signupLabel || formatRewardAmountLabel(1000);
       const emailLabel = rewardPolicy?.emailVerifyLabel || formatRewardAmountLabel(2000);
       return {
@@ -924,9 +920,6 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
         emailTitle: "E-posta Onay Ödülü",
         emailAmountHtml: `<b>${escapeHtml(emailLabel)}</b> Anında`,
         emailMeta: "Onay Sonrası Çark ve Promo Aktif Olur.",
-        activityTitle: "Aylık Aktiflik Ödülleri",
-        activityValueHtml: activityLines,
-        activityMeta: "Her ay sıfırlanır ve otomatik hesaplara yatar.",
         heroRewardBadge: rewardPolicy?.rewardFlowBadge || rewardPolicy?.registrationFlowLabel || "Kayıt + Doğrulama",
         heroRetentionBadge: chatSummary,
         statsUpdatedLabel: safeData?.lastSeen || safeData?.lastActiveAt ? new Date(Number(safeData.lastSeen || safeData.lastActiveAt)).toLocaleString("tr-TR") : "Canlı veri bekleniyor"
@@ -954,7 +947,7 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
       return [
         { key: "level", label: "Hesap Seviyesi", value: String(getUserLevel(normalized)), hint: "Tek progression modelinden" },
         { key: "balance", label: "Bakiye", value: `${formatNumber(Number(normalized.balance || stats.balance || 0) || 0)} MC`, hint: "Canlı hesap bakiyesi" },
-        { key: "activity", label: "Aylık Aktiflik", value: formatNumber(monthlyActivity), hint: "Aylık ödül sıralaması" },
+        { key: "activity", label: "Aylık Aktiflik", value: formatNumber(monthlyActivity), hint: "Aylık oyun katılımı" },
         { key: "rounds", label: "Toplam Oyun", value: formatNumber(totalRounds), hint: `${formatNumber(totalWins)} galibiyet · %${Number(winRate).toFixed(1)} başarı` },
         { key: "leaderboard", label: "Liderlik Verisi", value: formatNumber(leaderboardLevelItems + leaderboardActivityItems), hint: "Seviye + aktiflik listesi" },
         { key: "xp", label: "Hesap XP", value: formatNumber(getUserAccountXp(normalized)), hint: "v7 seviye eğrisi" }
@@ -1003,18 +996,21 @@ function buildHeroPromoSlides(overview = {}) {
           icon: 'fa-plus',           chip: 'Hemen Tanımlanır',           eyebrow: overview.signupTitle || 'Yeni Üyelik Bonusu',           titleHtml: overview.signupAmountHtml || '<b>1.000 MC</b> Anında',           meta: overview.signupMeta || 'Hesabın Açılır Açılmaz Tanımlanır.'
         },         {           key: 'email',           theme: 'cyan',           icon: 'fa-envelope-open-text',
           chip: 'Doğrulama Sonrası',           eyebrow: overview.emailTitle || 'E-posta Onay Ödülü',           titleHtml: overview.emailAmountHtml || '<b>2.000 MC</b> Anında',           meta: overview.emailMeta || 'Onay Sonrası Çark ve Promo Aktif Olur.'         },
-        {           key: 'activity',           theme: 'gold',           icon: 'fa-trophy',           chip: 'Her Ay Otomatik',
-          eyebrow: overview.activityTitle || 'Aylık Aktiflik Ödülleri',           titleHtml: '<b>İlk 5 Oyuncuya</b> MC Dağılımı',           meta: overview.activityMeta || 'Her ay sıfırlanır ve otomatik hesaplara yatar.',           ladder         }
+        {           key: 'games',           theme: 'gold',           icon: 'fa-gamepad',           chip: 'Oyunları Keşfet',
+          eyebrow: 'PlayMatrix Oyun Dünyası',           titleHtml: '<b>Altı Farklı Oyun</b> Tek Platform',
+          meta: 'Satranç, Pişti, Crash ve üç refleks oyununu keşfet. Gerçek para kullanılmaz.' }
       ];     }      function stopHeroCarouselAutoplay() {       if (heroCarouselState.timer) {
         clearTimeout(heroCarouselState.timer);         heroCarouselState.timer = 0;       }     } 
-    function scheduleHeroCarouselAutoplay() {       stopHeroCarouselAutoplay();       if (document.hidden) return;       if ((heroCarouselState.slides || []).length <= 1) return;       heroCarouselState.timer = window.setTimeout(() => {
+    function scheduleHeroCarouselAutoplay() {       stopHeroCarouselAutoplay();       if (document.hidden) return;       if ((heroCarouselState.slides || []).length <= 1) return;       if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;       heroCarouselState.timer = window.setTimeout(() => {
         setHeroCarouselIndex(heroCarouselState.index + 1, { resetTimer: true });       }, heroCarouselState.autoplayMs);     }      function recalcHeroCarouselMetrics() {
       const track = $('heroPromoTrack');       if (!track) return;       const firstSlide = track.querySelector('.hero-slide');       if (!firstSlide) {         heroCarouselState.slideSpan = 0;
         return;       }       const trackStyles = window.getComputedStyle(track);       const gap = parseFloat(trackStyles.columnGap || trackStyles.gap || '14') || 14;       heroCarouselState.slideSpan = firstSlide.getBoundingClientRect().width + gap;
     }      function applyHeroCarouselPosition(offset = null, animate = true) {       const track = $('heroPromoTrack');       if (!track) return;
       recalcHeroCarouselMetrics();       const targetOffset = Number.isFinite(offset) ? offset : heroCarouselState.index * heroCarouselState.slideSpan;       track.classList.toggle('is-dragging', !animate);       track.style.transform = `translate3d(${-targetOffset}px, 0, 0)`;     }
      function updateHeroCarouselDots() {       const dots = document.querySelectorAll('#heroPromoDots .hero-slider-dot');       dots.forEach((dot, index) => {         const isActive = index === heroCarouselState.index;
-        dot.classList.toggle('is-active', isActive);         dot.setAttribute('aria-current', isActive ? 'true' : 'false');       });     } 
+        dot.classList.toggle('is-active', isActive);         dot.setAttribute('aria-current', isActive ? 'true' : 'false');       });
+      const counter = document.querySelector('.hero-slider-timer');
+      if (counter) counter.textContent = `${String(heroCarouselState.index + 1).padStart(2, '0')} / ${String((heroCarouselState.slides || []).length).padStart(2, '0')}`;     } 
     function setHeroCarouselIndex(nextIndex = 0, { animate = true, resetTimer = false } = {}) {       const count = (heroCarouselState.slides || []).length;       if (!count) return;       const normalized = ((Number(nextIndex) || 0) % count + count) % count;       heroCarouselState.index = normalized;
       applyHeroCarouselPosition(null, animate);       updateHeroCarouselDots();       if (resetTimer) scheduleHeroCarouselAutoplay();     } 
     function bindHeroCarousel() {       if (heroCarouselState.bound) return;       const viewport = $('heroPromoViewport');       const dots = $('heroPromoDots');       if (!viewport || !dots) return;

@@ -4,7 +4,7 @@ const { requireAuth } = require('./server-core-security.js');
 const { debitBalance, creditBalance, readBalance } = require('./server-core-economyService.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
-const { getProgression, normalizeXpBigInt } = require('./server-core-progressionService.js');
+const { getProgression } = require('./server-core-progressionService.js');
 
 const router = express.Router();
 const rooms = new Map();
@@ -22,7 +22,6 @@ const ROOM_IDLE_EMPTY_MS = 5 * 60 * 1000;
 const ROOM_EXTENSION_RESPONSE_MS = 60 * 1000;
 const FREE_DAILY_WIN_LIMIT = 10;
 const FREE_WIN_REWARD_MC = 5000;
-const BET_XP_PER_1000_MC = 100;
 const BOT_PROFILE = Object.freeze({ uidPrefix: 'bot_', name: 'PlayMatrix', username: 'PlayMatrix', avatar: '/public-assets-images-logo.png' });
 const BOT_MOVE_DELAY_MS = Math.max(3000, Math.trunc(Number(process.env.CHESS_BOT_MOVE_DELAY_MS || 3000) || 3000));
 const MIN_BET = 1000;
@@ -365,23 +364,22 @@ function resultSummaryFor(r, viewerUid = '') {
   const me = r.players.find((p) => p.uid === viewerUid);
   const won = !!me && r.winnerUid === me.uid;
   const draw = r.winnerColor === 'draw' || r.result === 'draw' || r.result === 'stalemate' || r.result === 'fifty-move-draw';
-  const xp = r.xpAwards?.[viewerUid]?.xpAwarded || 0;
   const balance = r.settlement?.[viewerUid]?.balance;
   const freeReward = r.freeRewards?.[viewerUid] || null;
   const outcome = draw ? 'draw' : won ? 'win' : 'loss';
   let message = '';
   if (r.result === 'player-exit') message = won ? 'Rakip oyundan ayrıldı. Oda kapatıldı ve sonuç işlendi.' : 'Oyundan ayrıldın. Oda kapatıldı ve rakibe bildirildi.';
   else if (r.result === 'inactivity-timeout') message = won ? 'Rakip 5 dakika hamle yapmadığı için oyun kapatıldı ve sonuç işlendi.' : '5 dakika hamle yapılmadığı için oyun kapatıldı.';
-  else if (r.mode === 'bot') message = 'Bot oyunu eğlence modudur. MC, XP ve level ödülü verilmez.';
-  else if (draw && r.mode === 'bet') message = `Bahisli Satranç berabere bitti. Bahsin yarısı iade edildi. Beraberlikte XP verilmez.`;
+  else if (r.mode === 'bot') message = 'Bot oyunu eğlence modudur. MC ödülü verilmez.';
+  else if (draw && r.mode === 'bet') message = `Bahisli Satranç berabere bitti. Bahsin yarısı iade edildi.`;
   else if (draw) message = 'Satranç berabere bitti. Bu sonuçta ödül verilmez.';
   else if (r.mode === 'free' && won) {
     if (freeReward?.rewarded) message = `Bahissiz Satranç galibiyeti: +${FREE_WIN_REWARD_MC.toLocaleString('tr-TR')} MC. Günlük hak: ${freeReward.used}/${FREE_DAILY_WIN_LIMIT}.`;
     else message = freeReward?.reason === 'DAILY_LIMIT' ? 'Bahissiz Satranç galibiyeti işlendi. Günlük 10 ödül hakkı dolduğu için MC verilmedi.' : 'Bahissiz Satranç sonucu işlendi.';
   } else if (r.mode === 'bet') {
     message = won
-      ? `Bahisli Satranç galibiyeti işlendi. Pot: ${Number(r.pot || 0).toLocaleString('tr-TR')} MC. +${xp.toLocaleString('tr-TR')} XP.`
-      : `Bahisli Satranç kaybı işlendi. Kazanç yok. Kullanılan bahis için +${xp.toLocaleString('tr-TR')} XP.`;
+      ? `Bahisli Satranç galibiyeti işlendi. Pot: ${Number(r.pot || 0).toLocaleString('tr-TR')} MC.`
+      : 'Bahisli Satranç kaybı işlendi. Kazanç yok.';
   } else {
     message = won ? 'Satranç galibiyeti işlendi.' : 'Satranç maçı kayıp olarak işlendi.';
   }
@@ -389,10 +387,8 @@ function resultSummaryFor(r, viewerUid = '') {
     gameType: 'chess', resultCode: r.result || 'finished', outcome, settledAt: r.finishedAt || r.updatedAt || now(),
     title: draw ? 'BERABERE' : won ? 'KAZANDIN!' : 'KAYBETTİN',
     message,
-    xpAwarded: xp,
     freeReward,
-    balance,
-    progression: r.xpAwards?.[viewerUid]?.progression || null
+    balance
   };
 }
 function publicRoom(r, viewerUid = '') {
@@ -455,80 +451,47 @@ async function chargePlayer(req, r) {
   if (!r.bet) return { ok: true, balance: await readBalance(uidOf(req)).catch(() => 0) };
   return debitBalance({ uid: uidOf(req), amount: r.bet, reason: 'chess-bet', idempotencyKey: `chess:bet:${r.id}:${uidOf(req)}`, metadata: { roomId: r.id, mode: r.mode } });
 }
-async function applyXpAndStats({ uid, xp, outcome, roomId, mode, bet }) {
-  if (!uid || !xp) return { ok: true, xpAwarded: 0, progression: getProgression(0) };
-  const key = `chess:xp:${roomId}:${uid}`;
+// Stats tracking is independent from account XP, which must never grow from gameplay.
+async function recordChessStats({ uid, outcome, roomId, mode, bet }) {
+  if (!uid) return { ok: false, error: 'UID_MISSING' };
+  const key = `chess:stats:${roomId}:${uid}`;
   const memoryKey = `idem:${key}`;
-  if (runtimeStore.temporary.get(memoryKey)) return runtimeStore.temporary.get(memoryKey);
+  if (runtimeStore.temporary.get(memoryKey)) return { ok: true, duplicate: true };
+  const updateStats = (data = {}) => {
+    const stats = data.gameStats || {};
+    const increment = current => {
+      const row = {
+        ...current,
+        rounds: Number(current.rounds || 0) + 1,
+        wins: Number(current.wins || 0) + (outcome === 'win' ? 1 : 0),
+        losses: Number(current.losses || 0) + (outcome === 'loss' ? 1 : 0),
+        draws: Number(current.draws || 0) + (outcome === 'draw' ? 1 : 0)
+      };
+      row.winRatePct = row.rounds ? Math.round((row.wins / row.rounds) * 1000) / 10 : 0;
+      return row;
+    };
+    return { ...stats, chess: increment(stats.chess || {}), total: increment(stats.total || {}) };
+  };
   const { db } = initFirebaseAdmin();
   if (!db) {
-    const xpKey = `xp:${uid}`;
     const statsKey = `gameStats:${uid}`;
-    const current = normalizeXpBigInt(runtimeStore.temporary.get(xpKey) || 0);
-    const next = current + BigInt(Math.max(0, Math.trunc(xp)));
-    const progression = getProgression(next);
-    const previousStats = runtimeStore.temporary.get(statsKey) || {};
-    const previousChess = previousStats.chess && typeof previousStats.chess === 'object' ? previousStats.chess : {};
-    const previousTotal = previousStats.total && typeof previousStats.total === 'object' ? previousStats.total : {};
-    const patchChess = {
-      ...previousChess,
-      rounds: Number(previousChess.rounds || 0) + 1,
-      wins: Number(previousChess.wins || 0) + (outcome === 'win' ? 1 : 0),
-      losses: Number(previousChess.losses || 0) + (outcome === 'loss' ? 1 : 0),
-      draws: Number(previousChess.draws || 0) + (outcome === 'draw' ? 1 : 0)
-    };
-    patchChess.winRatePct = patchChess.rounds ? Math.round((patchChess.wins / patchChess.rounds) * 1000) / 10 : 0;
-    const patchTotal = {
-      ...previousTotal,
-      rounds: Number(previousTotal.rounds || 0) + 1,
-      wins: Number(previousTotal.wins || 0) + (outcome === 'win' ? 1 : 0),
-      losses: Number(previousTotal.losses || 0) + (outcome === 'loss' ? 1 : 0),
-      draws: Number(previousTotal.draws || 0) + (outcome === 'draw' ? 1 : 0)
-    };
-    patchTotal.winRatePct = patchTotal.rounds ? Math.round((patchTotal.wins / patchTotal.rounds) * 1000) / 10 : 0;
-    runtimeStore.temporary.set(xpKey, next.toString(), 30 * 86400000);
-    runtimeStore.temporary.set(statsKey, { ...previousStats, chess: patchChess, total: patchTotal }, 30 * 86400000);
-    const out = { ok: true, firestore: false, xpAwarded: xp, progression };
-    runtimeStore.temporary.set(memoryKey, out, 24 * 3600000);
-    return out;
+    const old = runtimeStore.temporary.get(statsKey) || {};
+    runtimeStore.temporary.set(statsKey, updateStats({ gameStats: old }), 30 * 86400000);
+  } else {
+    const userRef = db.collection('users').doc(uid);
+    const idemRef = db.collection('idempotency').doc(key);
+    await db.runTransaction(async tx => {
+      if ((await tx.get(idemRef)).exists) return;
+      const snap = await tx.get(userRef);
+      const data = snap.exists ? snap.data() || {} : {};
+      tx.set(userRef, { gameStats: updateStats(data), monthlyActiveScore: Number(data.monthlyActiveScore || 0) + 1, updatedAt: now() }, { merge: true });
+      tx.create(idemRef, { key, type: 'chess-stats', uid, roomId, mode, bet, outcome, createdAt: now() });
+    });
   }
-  const userRef = db.collection('users').doc(uid);
-  const idemRef = db.collection('idempotency').doc(key);
-  let output = null;
-  await db.runTransaction(async (tx) => {
-    const idem = await tx.get(idemRef);
-    if (idem.exists) { output = idem.data().result; return; }
-    const snap = await tx.get(userRef);
-    const data = snap.exists ? (snap.data() || {}) : {};
-    const current = normalizeXpBigInt(data.xp ?? data.accountXp ?? 0);
-    const next = current + BigInt(Math.max(0, Math.trunc(xp)));
-    const progression = getProgression(next);
-    const gameStats = data.gameStats && typeof data.gameStats === 'object' ? data.gameStats : {};
-    const chess = gameStats.chess && typeof gameStats.chess === 'object' ? gameStats.chess : {};
-    const total = gameStats.total && typeof gameStats.total === 'object' ? gameStats.total : {};
-    const patchChess = {
-      ...chess,
-      rounds: Number(chess.rounds || 0) + 1,
-      wins: Number(chess.wins || 0) + (outcome === 'win' ? 1 : 0),
-      losses: Number(chess.losses || 0) + (outcome === 'loss' ? 1 : 0),
-      draws: Number(chess.draws || 0) + (outcome === 'draw' ? 1 : 0)
-    };
-    patchChess.winRatePct = patchChess.rounds ? Math.round((patchChess.wins / patchChess.rounds) * 1000) / 10 : 0;
-    const patchTotal = {
-      ...total,
-      rounds: Number(total.rounds || 0) + 1,
-      wins: Number(total.wins || 0) + (outcome === 'win' ? 1 : 0),
-      losses: Number(total.losses || 0) + (outcome === 'loss' ? 1 : 0),
-      draws: Number(total.draws || 0) + (outcome === 'draw' ? 1 : 0)
-    };
-    patchTotal.winRatePct = patchTotal.rounds ? Math.round((patchTotal.wins / patchTotal.rounds) * 1000) / 10 : 0;
-    output = { ok: true, xpAwarded: xp, progression };
-    tx.set(userRef, { xp: progression.xp, accountXp: progression.currentXp, accountLevel: progression.accountLevel, level: progression.accountLevel, accountLevelProgressPct: progression.accountLevelProgressPct, progression, gameStats: { ...gameStats, chess: patchChess, total: patchTotal }, monthlyActiveScore: Number(data.monthlyActiveScore || 0) + 1, updatedAt: now() }, { merge: true });
-    tx.set(idemRef, { key, type: 'chess-xp', uid, roomId, mode, bet, outcome, createdAt: now(), result: output }, { merge: false });
-  });
-  runtimeStore.temporary.set(memoryKey, output, 24 * 3600000);
-  return output;
+  runtimeStore.temporary.set(memoryKey, true, 24 * 3600000);
+  return { ok: true, recorded: true };
 }
+
 async function awardFreeWinReward({ uid, roomId }) {
   if (!uid || !roomId) return { ok: false, rewarded: false, reason: 'INVALID_REQUEST', amount: 0, used: 0, limit: FREE_DAILY_WIN_LIMIT };
   const dateKey = istanbulDateKey();
@@ -601,7 +564,6 @@ async function settleRoom(r, reason = '') {
   r.settled = true;
   r.finishedAt = r.finishedAt || now();
   r.settlement = r.settlement || {};
-  r.xpAwards = r.xpAwards || {};
   r.freeRewards = r.freeRewards || {};
   const humans = liveHumanPlayers(r);
   const isBetReal = r.bet > 0 && r.mode === 'bet' && humans.length === 2;
@@ -610,19 +572,18 @@ async function settleRoom(r, reason = '') {
   if (isBetReal) {
     if (draw) {
       for (const p of humans) {
-        const credit = await creditBalance({ uid: p.uid, amount: Math.floor(r.bet / 2), reason: 'chess-draw-half-refund', idempotencyKey: `chess:draw:${r.id}:${p.uid}`, metadata: { roomId: r.id, result: r.result, xpAwarded: 0 } }).catch((error) => ({ ok: false, error: error.message }));
+        const credit = await creditBalance({ uid: p.uid, amount: Math.floor(r.bet / 2), reason: 'chess-draw-half-refund', idempotencyKey: `chess:draw:${r.id}:${p.uid}`, metadata: { roomId: r.id, result: r.result } }).catch((error) => ({ ok: false, error: error.message }));
         r.settlement[p.uid] = credit;
       }
     } else if (r.winnerUid) {
       const credit = await creditBalance({ uid: r.winnerUid, amount: r.pot, reason: 'chess-win', idempotencyKey: `chess:win:${r.id}:${r.winnerUid}`, metadata: { roomId: r.id, result: r.result } }).catch((error) => ({ ok: false, error: error.message }));
       r.settlement[r.winnerUid] = credit;
     }
-    if (!draw) {
-      const xp = Math.max(BET_XP_PER_1000_MC, Math.floor(r.bet / 1000) * BET_XP_PER_1000_MC);
-      for (const p of humans) {
-        const outcome = p.uid === r.winnerUid ? 'win' : 'loss';
-        r.xpAwards[p.uid] = await applyXpAndStats({ uid: p.uid, xp, outcome, roomId: r.id, mode: r.mode, bet: r.bet }).catch((error) => ({ ok: false, xpAwarded: 0, error: error.message }));
-      }
+    for (const p of humans) {
+      const outcome = draw ? 'draw' : p.uid === r.winnerUid ? 'win' : 'loss';
+      await recordChessStats({ uid: p.uid, outcome, roomId: r.id, mode: r.mode, bet: r.bet }).catch(error => {
+        console.error('[chess:stats:error]', error.message);
+      });
     }
   } else if (isFreeReal && !draw && r.winnerUid) {
     r.freeRewards[r.winnerUid] = await awardFreeWinReward({ uid: r.winnerUid, roomId: r.id }).catch((error) => ({ ok: false, rewarded: false, error: error.message, amount: 0 }));
@@ -655,7 +616,7 @@ async function createRoomFor(req, opts = {}) {
   }
   const ts = now();
   const player = await buildPlayer(req, 'w');
-  const r = { id: `ch_${ts}_${crypto.randomBytes(12).toString('hex')}`, status: mode === 'bot' ? 'playing' : 'waiting', mode, bet: mode === 'bot' ? 0 : betAmount, pot: mode === 'bot' ? 0 : betAmount, fen: INITIAL_FEN, turn: 'w', moves: [], moveIds: {}, stateVersion: 1, drawOfferBy: '', check: '', createdAt: ts, updatedAt: ts, finishedAt: 0, players: [player], clock: { lastTurnAt: ts }, settlement: {}, xpAwards: {}, freeRewards: {}, lifecycle: makeLifecycle(ts), lastGameActionAt: ts, lastMoveAt: 0, botThinkingUntil: 0 };
+  const r = { id: `ch_${ts}_${crypto.randomBytes(12).toString('hex')}`, status: mode === 'bot' ? 'playing' : 'waiting', mode, bet: mode === 'bot' ? 0 : betAmount, pot: mode === 'bot' ? 0 : betAmount, fen: INITIAL_FEN, turn: 'w', moves: [], moveIds: {}, stateVersion: 1, drawOfferBy: '', check: '', createdAt: ts, updatedAt: ts, finishedAt: 0, players: [player], clock: { lastTurnAt: ts }, settlement: {}, freeRewards: {}, lifecycle: makeLifecycle(ts), lastGameActionAt: ts, lastMoveAt: 0, botThinkingUntil: 0 };
   if (mode === 'bot') {
     r.players.push({ uid: `${BOT_PROFILE.uidPrefix}${r.id}`, name: BOT_PROFILE.name, username: BOT_PROFILE.username, avatar: BOT_PROFILE.avatar, color: 'b', timeLeftMs: FREE_TIME_MS, connected: true, joinedAt: ts, lastSeenAt: ts, isBot: true });
   }
