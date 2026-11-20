@@ -1317,3 +1317,7 @@
 .t-avatar-wrap > [data-pm-avatar="true"], .t-avatar-wrap > .pm-avatar{inline-size:42px!important;block-size:42px!important;position:relative!important;overflow:visible!important;}
 .t-avatar-wrap .pm-avatar-img, .t-avatar-wrap .t-avatar{inline-size:100%!important;block-size:100%!important;transform:translate(-50%,-50%) scale(var(--pm-avatar-scale,.84))!important;}
 
+
+/* Tur sonuç politikası kullanıcıya açık ve okunabilir tutulur. */
+.crash-result-disclosure { margin: .5rem 1rem; color: #c8d4eb; background: rgba(14,25,44,.92); border: 1px solid rgba(115,152,219,.26); border-radius: .65rem; padding: .7rem .95rem; font-size: .78rem; line-height: 1.5; }
+@media (max-width: 430px) { .crash-result-disclosure { margin: .4rem .6rem; font-size: .72rem; } }

@@ -48,14 +48,6 @@
       {
         "source": "/games/space-pro/",
         "destination": "/games-space-pro-index.html"
-      },
-      {
-        "source": "/games/pattern-master",
-        "destination": "/games-pattern-master-index.html"
-      },
-      {
-        "source": "/games/pattern-master/",
-        "destination": "/games-pattern-master-index.html"
       }
     ],
     "headers": [

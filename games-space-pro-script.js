@@ -1,17 +1,37 @@
 (() => {
-  let runId = '';
-  const createRunId = () => (crypto.randomUUID ? crypto.randomUUID() : `space_${Date.now()}_${Math.random().toString(36).slice(2)}`);
-  const api = async (score) => {
-    try {
-      const res = await fetch('/api/games/space-pro/submit', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ runId, score: Math.max(0, Math.floor(Number(score)||0)), durationMs: Date.now() - Number(sessionStorage.pmClassicStartedAt || Date.now()) }) });
-      return await res.json();
-    } catch (error) { console.warn('[PlayMatrix] classic submit failed', error); return null; }
+  'use strict';
+  const game = 'space-pro';
+  let startPromise = null;
+  const core = () => window.__PM_ONLINE_CORE__;
+  const signedIn = () => !!core()?.auth?.currentUser;
+  const showMessage = (message) => {
+    const node = document.querySelector('#startup .blink, #gameOver, #finalScore');
+    if (node && !signedIn()) node.textContent = message;
   };
+  async function beginRun() {
+    if (!signedIn()) throw Error('AUTH_REQUIRED');
+    const current = core();
+    startPromise = current.requestWithAuth(`/api/games/${game}/start`, { method: 'POST', retries: 0, allowSessionFallback: false });
+    return startPromise;
+  }
+  async function finishRun(score) {
+    const pending = startPromise;
+    startPromise = null;
+    if (!pending) return { ok: false, error: 'RUN_NOT_STARTED' };
+    try {
+      const started = await pending;
+      if (!started?.runId) return { ok: false, error: 'RUN_NOT_STARTED' };
+      return await core().requestWithAuth(`/api/games/${game}/submit`, { method: 'POST', retries: 0, allowSessionFallback: false, body: { runId: started.runId, score: Math.max(0, Math.trunc(Number(score) || 0)) } });
+    } catch (error) {
+      console.warn('[PlayMatrix] Arcade kayıt işlemi başarısız', { code: error?.code || 'UNKNOWN' });
+      return { ok: false, error: 'İşleminiz kaydedilemedi. Lütfen yeniden deneyin.' };
+    }
+  }
   window.__PM_CLASSIC__ = {
-    canPlay: () => true,
+    canPlay: () => { const ok = signedIn(); if (!ok) showMessage('Oyuna katılmak için hesabınıza giriş yapmanız gerekiyor.'); return ok; },
     redirectToLogin: () => { window.location.href = '/'; },
-    beginRun: () => { runId = createRunId(); sessionStorage.pmClassicStartedAt = String(Date.now()); },
-    finishRun: api
+    beginRun,
+    finishRun
   };
 })();
 
@@ -210,7 +230,7 @@ const canvas = document.getElementById("game");
             document.getElementById("gameOver").style.display = "flex";
             document.getElementById("finalScore").innerText = `FINAL SCORE: ${state.score}`;
             Promise.resolve(window.__PM_CLASSIC__?.finishRun?.(state.score)).then((result) => {
-                if (result?.ok) document.getElementById("finalScore").innerText = `FINAL SCORE: ${state.score} • +${result.levelPoints} seviye puanı`;
+                if (result?.ok) document.getElementById("finalScore").innerText = `FINAL SCORE: ${state.score} • Skor kaydedildi`;
             }).catch(() => null);
         }
     }

@@ -142,6 +142,7 @@
 
     <div class="bottom-layout">
         <div id="crashRuntimeNotice" class="crash-runtime-notice" aria-live="polite"></div>
+        <div id="crashResultDisclosure" class="crash-result-disclosure" role="note" aria-live="polite">Tur sonuçları oyun kurallarına göre belirlenir.</div>
         <div class="bet-controls">
             <div class="bet-box">
                 <div class="bet-box-header">
@@ -155,7 +156,7 @@
                             <button class="step-btn" data-target="inpBet1" data-op="minus10" type="button">−</button>
                             <div class="amount-input-group">
                                 <label>BET,(MC)</label>
-                                <input type="number" id="inpBet1" value="10" min="1" max="1000000" step="1" inputmode="numeric">
+                                <input type="number" id="inpBet1" value="10" min="10" max="5000" step="1" inputmode="numeric">
                             </div>
                             <button class="step-btn" data-target="inpBet1" data-op="plus10" type="button">+</button>
                         </div>
@@ -180,7 +181,7 @@
                     <div id="betNotice1" class="bet-box-notice" aria-live="polite"></div>
                     <div class="auto-cashout-control" aria-label="Otomatik bozdurma ayarı 1">
                         <input type="checkbox" id="chkAutoCash1" class="toggle-switch-only" aria-label="Otomatik bozdurma 1">
-                        <div class="auto-input-shell"><span>x</span><input type="number" id="inpAuto1" value="50.00" min="2.00" max="100.00" step="0.10" inputmode="decimal"></div>
+                        <div class="auto-input-shell"><span>x</span><input type="number" id="inpAuto1" value="50.00" min="1.05" max="100.00" step="0.10" inputmode="decimal"></div>
                     </div>
                 </div>
             </div>
@@ -197,7 +198,7 @@
                             <button class="step-btn" data-target="inpBet2" data-op="minus10" type="button">−</button>
                             <div class="amount-input-group">
                                 <label>BET,(MC)</label>
-                                <input type="number" id="inpBet2" value="10" min="1" max="1000000" step="1" inputmode="numeric">
+                                <input type="number" id="inpBet2" value="10" min="10" max="5000" step="1" inputmode="numeric">
                             </div>
                             <button class="step-btn" data-target="inpBet2" data-op="plus10" type="button">+</button>
                         </div>
@@ -222,7 +223,7 @@
                     <div id="betNotice2" class="bet-box-notice" aria-live="polite"></div>
                     <div class="auto-cashout-control" aria-label="Otomatik bozdurma ayarı 2">
                         <input type="checkbox" id="chkAutoCash2" class="toggle-switch-only" aria-label="Otomatik bozdurma 2">
-                        <div class="auto-input-shell"><span>x</span><input type="number" id="inpAuto2" value="50.00" min="2.00" max="100.00" step="0.10" inputmode="decimal"></div>
+                        <div class="auto-input-shell"><span>x</span><input type="number" id="inpAuto2" value="50.00" min="1.05" max="100.00" step="0.10" inputmode="decimal"></div>
                     </div>
                 </div>
             </div>

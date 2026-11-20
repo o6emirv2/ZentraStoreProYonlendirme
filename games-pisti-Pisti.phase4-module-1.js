@@ -670,7 +670,7 @@ async function fetchLobby(initial = false){
   } catch(error) {
     if (initial || !fetchedRooms.length) {
       const list = document.getElementById('roomList');
-      if (list) list.innerHTML = `<div class="pm-pisti-empty">Lobi verisi alınamadı.</div>`;
+      if (list) list.innerHTML = `<div class="pm-pisti-empty">Masalar yüklenemiyor. Bağlantınızı kontrol edip yeniden deneyin.</div>`;
     }
     showLobbyNotice('Lobi verileri yüklenemedi. Bağlantını kontrol edip tekrar deneyebilirsin.', 'error', 'Tekrar Dene', () => fetchLobby(true).catch(() => null));
     throw error;
@@ -684,7 +684,7 @@ window.renderRoomListLocally = () => {
   let filtered = fetchedRooms;
   if (query) { filtered = fetchedRooms.filter(r => r.roomName.toLowerCase().includes(query) || r.hostName.toLowerCase().includes(query)); }
   
-  if(filtered.length===0){ list.innerHTML=`<div class="pm-pisti-empty">Masa bulunamadı.</div>`; return; }
+  if(filtered.length===0){ list.innerHTML=`<div class="pm-pisti-empty">Henüz açık masa yok.</div>`; return; }
   let html = '';
   filtered.forEach(r => {
     const isFull = r.currentPlayers >= r.maxPlayers || r.status === 'playing';
@@ -708,21 +708,41 @@ window.renderRoomListLocally = () => {
   list.innerHTML = html;
 };
 
+function pistiRequestId(mode, bet){
+  const key=`pm:pisti:create:${String(mode)}:${String(bet)}`;
+  try{
+    let value=sessionStorage.getItem(key);
+    if(value) return value;
+    value=`pm_${crypto.randomUUID()}`;sessionStorage.setItem(key,value);return value;
+  }catch(_){return `pm_${crypto.randomUUID()}`;}
+}
+function releasePistiRequestId(mode,bet){try{sessionStorage.removeItem(`pm:pisti:create:${String(mode)}:${String(bet)}`);}catch(_){}}
+function pistiFriendlyError(error){
+  const code=String(error?.message||error||'');
+  if(code.includes('INSUFFICIENT_BALANCE'))return 'Bu oyuna katılmak için yeterli MC bakiyeniz bulunmuyor.';
+  if(code.includes('BET_LIMIT')||code.includes('INVALID_BET'))return 'Pişti bahis miktarı 1.000–10.000 MC arasında olmalıdır.';
+  if(code.includes('ROOM_FULL')||code.includes('ROOM_NOT_WAITING'))return 'Bu masa artık katılıma açık değil. Başka bir masa seçebilirsiniz.';
+  if(code.includes('ROOM_NOT_FOUND'))return 'Masa bulunamadı veya artık mevcut değil.';
+  if(code.includes('AUTH_'))return 'Oyun için hesabınıza giriş yapmanız gerekiyor.';
+  return 'İşleminiz şu anda tamamlanamıyor. Lütfen tekrar deneyin.';
+}
 window.submitCreateRoomAction = async () => {
   if (isProcessing) return; isProcessing = true;
   closeCreateModal();
   const tab = document.getElementById('currentTabValue').value;
   const mode = document.getElementById('roomModeSelect').value;
-  const bet = parseInt(document.getElementById('roomBetInput').value);
+  const bet = Number(document.getElementById('roomBetInput').value);
+  if(!Number.isSafeInteger(bet)||bet<1000||bet>10000){showMatrixModal('Bahis limiti','Pişti bahis tutarı 1.000–10.000 MC arasında olmalıdır.','warning');isProcessing=false;return;}
+  const requestId=pistiRequestId(mode,bet);
 
   if (tab === 'open') {
-      try{ const res = await fetchAPI('/api/pisti-online/play-open', 'POST', {mode, bet}); if(res.ok) { try { window.__PM_GAME_ACCOUNT_SYNC__?.notifyMutation?.(res); } catch (_) {} await enterGame(res.room.id); } else throw new Error(res.error); } catch(e){ showMatrixModal("Reddedildi", e.message, "error"); } finally { isProcessing = false; }
+      try{ const res = await fetchAPI('/api/pisti-online/play-open', 'POST', {mode, bet, requestId}); if(res.ok) { releasePistiRequestId(mode,bet); try { window.__PM_GAME_ACCOUNT_SYNC__?.notifyMutation?.(res); } catch (_) {} await enterGame(res.room.id); } else throw new Error(res.error); } catch(e){ showMatrixModal("İşlem tamamlanamadı", pistiFriendlyError(e), "error"); } finally { isProcessing = false; }
   } else {
       const roomName = document.getElementById('roomNameInput').value;
       const password = document.getElementById('roomPassInput').value;
       if(roomName.length < 5) { showMatrixModal("Hata", "Oda adı min 5 karakter.", "error"); isProcessing = false; return; }
       if(password.length < 5) { showMatrixModal("Hata", "Şifre min 5 hane.", "error"); isProcessing = false; return; }
-      try{ const res = await fetchAPI('/api/pisti-online/create-private', 'POST', {mode, bet, roomName, password}); if(res.ok) { try { window.__PM_GAME_ACCOUNT_SYNC__?.notifyMutation?.(res); } catch (_) {} await enterGame(res.room.id); } else throw new Error(res.error); } catch(e){ showMatrixModal("Reddedildi", e.message, "error"); } finally { isProcessing = false; }
+      try{ const res = await fetchAPI('/api/pisti-online/create-private', 'POST', {mode, bet, roomName, password, requestId}); if(res.ok) { releasePistiRequestId(mode,bet); try { window.__PM_GAME_ACCOUNT_SYNC__?.notifyMutation?.(res); } catch (_) {} await enterGame(res.room.id); } else throw new Error(res.error); } catch(e){ showMatrixModal("İşlem tamamlanamadı", pistiFriendlyError(e), "error"); } finally { isProcessing = false; }
   }
 };
 
@@ -773,7 +793,11 @@ async function enterGame(id){
   return true;
 }
 
-function getCardHTML(c){ return c==='BACK' ? `<img src="https://deckofcardsapi.com/static/img/back.png">` : `<img src="https://deckofcardsapi.com/static/img/${escapeHTML(c.split('|')[0])}.png">`; }
+function getCardHTML(c){
+  const card=String(c||'').split('|')[0];
+  const token=/^(?:A|[2-9]|10|J|Q|K)[SHDC]$/.test(card)?card:'BACK';
+  return `<img src="/public-assets-cards-${token}.svg" alt="${escapeHTML(token==='BACK'?'Kart arkası':token)}" loading="lazy">`;
+}
 
 function resolveFrameIndex(level) {
   if (window.PMAvatar && typeof window.PMAvatar.getFrameAssetIndex === 'function') {
