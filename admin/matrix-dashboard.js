@@ -46,6 +46,28 @@ function panelTemplate() {
         <div class="status" role="status" id="siteContentStatus"></div>
       </section>
 
+      <section class="panel stack" aria-labelledby="crashPolicyHeading">
+        <div><h2 id="crashPolicyHeading">CRASH OYUN POLİTİKASI</h2>
+          <p class="lead">Yeni turlarda ağırlıklı rastgele dağılım veya önceden tanımlanmış 100 sonuç kullanılır. Bahis açılmış turun sonucu değiştirilemez. Bu çalışma biçimi kullanıcılara açıklanmalıdır.</p></div>
+        <div class="field-grid">
+          <div class="field"><label for="crashPolicyMode">Tur belirleme yöntemi</label><select id="crashPolicyMode"><option value="weighted">Ağırlıklı rastgele</option><option value="planned">100 turluk planlı</option></select></div>
+          <div class="field"><label for="crashPolicyCursor">Planlanan turlarda kullanılan kayıt</label><output id="crashPolicyCursor">0 / 100</output></div>
+          <div class="field pm-admin-grid-span-all"><label for="crashPolicyPlan">100 çarpan (her satıra bir değer, 1.05 ile 100.00 arasında)</label><textarea id="crashPolicyPlan" rows="7" spellcheck="false" placeholder="1.20&#10;1.60&#10;1.90&#10;10.00&#10;100.00"></textarea></div>
+          <div class="field pm-admin-grid-span-all"><label for="crashPolicyWeights">Ağırlık aralıkları — her satırda min,max,ağırlık (min 1.05 max 100.00)</label><textarea id="crashPolicyWeights" rows="7" spellcheck="false" placeholder="1.05,1.50,34"></textarea></div>
+        </div>
+        <div class="action-row"><button type="button" id="saveCrashPolicyBtn">ÇARPAN AYARINI KAYDET</button><button type="button" id="saveCrashWeightsBtn">AĞIRLIKLARI KAYDET</button></div>
+        <div class="status" id="crashPolicyStatus" role="status"></div>
+      </section>
+      <section class="panel stack" aria-labelledby="botHeading">
+        <div><h2 id="botHeading">BOT ZORLUĞU</h2><p class="lead">Yeni oyunlar için geçerlidir; devam eden oyunlara müdahale edilmez.</p></div>
+        <div class="field-grid">
+          <div class="field"><label for="botChessDifficulty">Satranç</label><select id="botChessDifficulty"><option value="easy">Kolay</option><option value="normal">Normal</option><option value="hard">Zor</option><option value="expert">Uzman</option></select></div>
+          <div class="field"><label for="botPistiDifficulty">Pişti (bot desteği geliştirilene kadar uygulanmaz)</label><select id="botPistiDifficulty" disabled><option value="normal">Normal</option></select></div>
+        </div>
+        <div class="action-row"><button type="button" id="saveBotDifficultyBtn">BOT ZORLUĞUNU KAYDET</button></div>
+        <div class="status" id="botDifficultyStatus" role="status"></div>
+      </section>
+
       <section class="panel stack">
         <div>
           <h2>DASHBOARD İSTATİSTİKLERİ</h2>
@@ -298,8 +320,8 @@ async function ensureAccess() {
   }
 }
 
-const CONTENT_GAME_KEYS = Object.freeze(['crash','chess','pisti','pattern','space','snake']);
-const CONTENT_GAME_LABELS = Object.freeze(['Crash','Satranç','Pişti','Pattern Master','Space Pro','Snake Pro']);
+const CONTENT_GAME_KEYS = Object.freeze(['crash','chess','pisti','space','snake']);
+const CONTENT_GAME_LABELS = Object.freeze(['Crash','Satranç','Pişti','Space Pro','Snake Pro']);
 function mountGameContentEditor() {
   const host = document.getElementById('gameContentFields');
   if (!host || host.childElementCount) return;
@@ -343,8 +365,51 @@ async function saveSiteContent() {
   } catch (error) { setStatus('siteContentStatus', error.message || 'İçerik kaydedilemedi.', 'error'); }
   finally { if (button) button.disabled = false; }
 }
+
+async function loadGamePolicies() {
+  try {
+    const [crash,bot]=await Promise.all([
+      adminFetch('/api/crash/admin/round-policy'),adminFetch('/api/admin/bot-difficulty')
+    ]);
+    document.getElementById('crashPolicyMode').value=crash.mode||'weighted';
+    document.getElementById('crashPolicyPlan').value=(crash.plan||[]).map(x=>Number(x).toFixed(2)).join('\n');
+    document.getElementById('crashPolicyCursor').textContent=`${crash.planCursor||0} / ${(crash.plan||[]).length}`;
+    document.getElementById('crashPolicyWeights').value=(crash.riskTable||[]).map(x=>`${x.min},${x.max},${x.weight}`).join('\n');
+    document.getElementById('botChessDifficulty').value=bot.config?.chess||'normal';
+  } catch(error) {setStatus('crashPolicyStatus',error.message||'Ayarlar yüklenemedi.','error');}
+}
+async function saveCrashPolicy() {
+  const mode=document.getElementById('crashPolicyMode')?.value;
+  const lines=(document.getElementById('crashPolicyPlan')?.value||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(mode==='planned'&&lines.length!==100) return setStatus('crashPolicyStatus',`Tam 100 geçerli kayıt gerekli: ${lines.length} bulundu.`,'error');
+  if(mode==='planned'&&lines.some(x=>!/^(?:\d{1,3})(?:\.\d{1,2})?$/.test(x)||Number(x)<1.05||Number(x)>100)) return setStatus('crashPolicyStatus','Geçersiz çarpan bulundu. Sınır 1.05–100.00.','error');
+  try {
+    await adminFetch('/api/crash/admin/round-policy',{method:'POST',body:JSON.stringify({mode,plan:mode==='planned'?lines:[]})});
+    setStatus('crashPolicyStatus','Ayar kaydedildi; yalnızca yeni turlar etkilenecek.','success');
+    await loadGamePolicies();
+  } catch(error) {setStatus('crashPolicyStatus',error.message,'error');}
+}
+async function saveCrashWeights() {
+  const text=document.getElementById('crashPolicyWeights')?.value||'';
+  const lines=text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  const rows=lines.map(row=>row.split(',').map(x=>x.trim())).map(parts=>({min:Number(parts[0]),max:Number(parts[1]),weight:Number(parts[2])}));
+  if(rows.length===0||rows.some(x=>!Number.isFinite(x.min)||!Number.isFinite(x.max)||!Number.isFinite(x.weight))) return setStatus('crashPolicyStatus','Geçerli çarpan ve ağırlık aralıkları girin.','error');
+  try {
+    await adminFetch('/api/crash/admin/risk-table',{method:'POST',body:JSON.stringify({rows})});
+    setStatus('crashPolicyStatus','Ağırlıklar kaydedildi.','success');
+  } catch(error){setStatus('crashPolicyStatus',error.message,'error');}
+}
+async function saveBotDifficulty() {
+  try {
+    const payload={chess:document.getElementById('botChessDifficulty')?.value,pisti:'normal'};
+    await adminFetch('/api/admin/bot-difficulty',{method:'PUT',body:JSON.stringify(payload)});
+    setStatus('botDifficultyStatus','Yeni oyunlar için bot zorluğu kaydedildi.','success');
+  }catch(error){setStatus('botDifficultyStatus',error.message,'error');}
+}
+
 async function loadDashboard() {
   loadSiteContent().catch(() => null);
+  loadGamePolicies().catch(() => null);
   const [dashboard, promos, issues] = await Promise.all([
     adminFetch('/api/admin/matrix/dashboard'),
     adminFetch('/api/admin/matrix/promos').catch(() => ({ items: [] })),
@@ -446,7 +511,8 @@ async function handleAction(action) {
       if (amount <= 0) throw new Error('Geçerli MC miktarı gerekli.');
       if (!reason) throw new Error('Ödül açıklaması gerekli.');
       if (confirmText !== 'ONAYLIYORUM') throw new Error('Yazılı onay gerekli.');
-      await adminFetch('/api/admin/matrix/reward-user', { method: 'POST', body: JSON.stringify({ identifier, amount, reason, confirmText }) });
+      const requestId = window.crypto?.randomUUID?.() || `admin_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      await adminFetch('/api/admin/matrix/reward-user', { method: 'POST', body: JSON.stringify({ identifier, amount, reason, confirmText, requestId }) });
       setStatus('rewardStatus', 'Kullanıcıya ödül gönderildi.', 'ok');
       return loadDashboard();
     }
@@ -488,6 +554,9 @@ async function handleAction(action) {
 root.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.id === 'saveCrashPolicyBtn') return saveCrashPolicy();
+  if (button.id === 'saveCrashWeightsBtn') return saveCrashWeights();
+  if (button.id === 'saveBotDifficultyBtn') return saveBotDifficulty();
   if (button.id === 'dashboardRefreshBtn') return handleAction('refresh');
   if (button.id === 'dashboardLogoutBtn') return handleAction('logout');
   if (button.id === 'runResetBtn') return handleAction('reset');
