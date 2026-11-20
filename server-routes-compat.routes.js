@@ -4,8 +4,11 @@ const env = require('./server-config-env.js');
 const { requireAuth, requireAdmin, strictLimiter } = require('./server-core-security.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
-const { localChat, dm, presence } = require('./server-social-socialRuntimeStore.js');
+const {presence} = require('./server-social-socialRuntimeStore.js');
 const { getProgression } = require('./server-core-progressionService.js');
+const friendships=require('./server-social-friendshipService.js');
+const referrals=require('./server-core-referralService.js');
+const messages=require('./server-social-messageService.js');
 const { runOnce } = require('./server-core-idempotencyService.js');
 const { SIGNUP_MC, EMAIL_VERIFICATION_MC } = require('./server-core-rewardPolicy.js');
 const router = express.Router();
@@ -17,7 +20,7 @@ const sanitizeText = (v, max = 500) => s(v, max).replace(/[<>]/g, '');
 const uidOf = (req) => s(req.user?.uid || req.headers['x-playmatrix-user'] || req.body?.uid || req.query?.uid || '', 160);
 
 const CHAT_POLICY = Object.freeze({
-  memoryOnly: true,
+  memoryOnly: false,
   lobbyDays: 7,
   directDays: 14,
   lobbyLabel: 'Global 7 Gün',
@@ -25,13 +28,12 @@ const CHAT_POLICY = Object.freeze({
   summaryLabel: 'Global 7 Gün · DM 14 Gün',
   manualDeleteLabel: 'Kullanıcı tarafından silindi',
   cleanupLabel: 'Saklama süresi dolduğu için temizlendi',
-  lobbyDisclosure: 'Yerel sohbet mesajları Render in-memory içinde geçici olarak saklanır; restart olursa silinir, en fazla 7 gün görünür.',
-  directDisclosure: 'DM mesajları Render in-memory içinde geçici olarak saklanır; restart olursa silinir, en fazla 14 gün görünür.',
+  lobbyDisclosure: 'Yerel sohbet mesajları hesabınıza bağlı olarak saklanır.',
+  directDisclosure: 'Özel mesajlar hesabınıza bağlı olarak saklanır.',
   tombstoneDisclosure: 'Silinen mesajların içeriği boş gösterilir; manuel silme ve süre temizliği ayrı etiketlenir.',
-  searchDisclosure: 'Mesaj arama yalnızca aktif in-memory mesajlarda çalışır.',
   editWindowHours: 24,
   editWindowLabel: 'Özel mesajlar ilk 24 saat içinde düzenlenebilir.',
-  transparencyNote: 'Global ve DM saklama süreleri ayrı izlenir; Firebase maliyeti oluşturmaz.'
+  transparencyNote: 'Mesajların saklanması ve silinmesi hesap güvenliği kurallarına tabidir.'
 });
 const fb = () => initFirebaseAdmin();
 function emailVerified(req) { return req.user?.email_verified === true || req.user?.emailVerified === true; }
@@ -141,9 +143,9 @@ function verifyClientKey(key=''){ const payload=verifyMatrixToken(key); if(!payl
 function adminContext(uid='',email=''){ return { isAdmin:true, uid, email, role:'owner', roles:['owner'], permissions:['admin.read','users.read','users.write','rewards.write','rewards.read','system.read','moderation.write'], source:'env', resolutionChain:['env:ADMIN_EMAILS','env:ADMIN_UIDS'] }; }
 function sessionFromReq(req){ const token=String(req.headers['x-session-token']||'').trim(); if(!token)return null; const session=runtimeStore.temporary.get(`session:${token}`); return session?.uid?{token,...session}:null; }
 router.get('/auth/admin/matrix/identity',(req,res)=>{ const session=sessionFromReq(req); if(session&&isConfiguredAdmin(session.email,session.uid))return res.json({ok:true,authenticated:true,admin:true,user:{uid:session.uid,email:session.email},adminContext:adminContext(session.uid,session.email)}); const primary=primaryAdmin(); if(!primary.email)return res.status(401).json({ok:false,authenticated:false,admin:false,user:null,error:'ADMIN_ENV_MISSING'}); return res.json({ok:true,authenticated:false,admin:true,user:primary,adminContext:adminContext(primary.uid,primary.email),manualFallback:true}); });
-router.post('/auth/admin/matrix/step-email',strictLimiter,(req,res)=>{ const primary=primaryAdmin(); const email=String(req.body?.email||primary.email||'').trim().toLowerCase(); const uid=env.adminEmails.includes(email)?(env.adminUids[0]||email):''; if(!email||!isConfiguredAdmin(email,uid))return res.status(401).json({ok:false,error:'Yönetici e-postası yetkili listede değil.'}); res.json({ok:true,boundToSession:false,manualFallback:true,email,ticket:signMatrix({typ:'pm_admin_step',uid,email,stage:2,issuedAt:now(),expiresAt:now()+7*60000,nonce:crypto.randomBytes(12).toString('hex')}),admin:adminContext(uid,email)}); });
-router.post('/auth/admin/matrix/step-password',strictLimiter,(req,res)=>{ const payload=verifyMatrixToken(req.body?.ticket||''); if(!payload||payload.typ!=='pm_admin_step'||Number(payload.stage)!==2||Number(payload.expiresAt||0)<now())return res.status(401).json({ok:false,error:'Güvenlik oturumu geçersiz.'}); if(!verifySecondFactor(req.body?.password||''))return res.status(403).json({ok:false,error:'Güvenlik şifresi doğrulanamadı.'}); res.json({ok:true,ticket:signMatrix({...payload,stage:3,prev:'identity+password',issuedAt:now(),expiresAt:now()+7*60000})}); });
-router.post('/auth/admin/matrix/step-name',strictLimiter,(req,res)=>{ const payload=verifyMatrixToken(req.body?.ticket||''); if(!payload||payload.typ!=='pm_admin_step'||Number(payload.stage)!==3||Number(payload.expiresAt||0)<now())return res.status(401).json({ok:false,error:'Güvenlik oturumu geçersiz.'}); if(!verifyThirdFactor(req.body?.adminName||req.body?.name||''))return res.status(403).json({ok:false,error:'Son güvenlik doğrulaması başarısız oldu.'}); if(!isConfiguredAdmin(payload.email,payload.uid))return res.status(403).json({ok:false,error:'Yönetici yetkisi doğrulanamadı.'}); const sessionToken=crypto.randomBytes(32).toString('hex'); const sessionId=crypto.randomBytes(12).toString('hex'); runtimeStore.temporary.set(`session:${sessionToken}`,{uid:payload.uid,email:payload.email,sessionSource:'admin_matrix',sessionId,at:now()},12*3600000); const clientKey=issueClientKey({uid:payload.uid,email:payload.email,sessionId}); res.setHeader('Set-Cookie',`pm_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`); res.json({ok:true,redirectTo:'/admin/admin.html',sessionToken,clientKey,admin:adminContext(payload.uid,payload.email)}); });
+router.post('/auth/admin/matrix/step-email',requireAuth,requireAdmin,strictLimiter,(req,res)=>{ const primary=primaryAdmin(); const email=String(req.user.email||'').trim().toLowerCase(); const uid=String(req.user.uid||''); if(!email||!isConfiguredAdmin(email,uid))return res.status(401).json({ok:false,error:'Yönetici e-postası yetkili listede değil.'}); res.json({ok:true,boundToSession:true,manualFallback:false,email,ticket:signMatrix({typ:'pm_admin_step',uid,email,stage:2,issuedAt:now(),expiresAt:now()+7*60000,nonce:crypto.randomBytes(12).toString('hex')}),admin:adminContext(uid,email)}); });
+router.post('/auth/admin/matrix/step-password',requireAuth,requireAdmin,strictLimiter,(req,res)=>{ const payload=verifyMatrixToken(req.body?.ticket||''); if(!payload||payload.typ!=='pm_admin_step'||Number(payload.stage)!==2||Number(payload.expiresAt||0)<now())return res.status(401).json({ok:false,error:'Güvenlik oturumu geçersiz.'}); if(!verifySecondFactor(req.body?.password||''))return res.status(403).json({ok:false,error:'Güvenlik şifresi doğrulanamadı.'}); res.json({ok:true,ticket:signMatrix({...payload,stage:3,prev:'identity+password',issuedAt:now(),expiresAt:now()+7*60000})}); });
+router.post('/auth/admin/matrix/step-name',requireAuth,requireAdmin,strictLimiter,(req,res)=>{ const payload=verifyMatrixToken(req.body?.ticket||''); if(!payload||payload.typ!=='pm_admin_step'||Number(payload.stage)!==3||Number(payload.expiresAt||0)<now())return res.status(401).json({ok:false,error:'Güvenlik oturumu geçersiz.'}); if(!verifyThirdFactor(req.body?.adminName||req.body?.name||''))return res.status(403).json({ok:false,error:'Son güvenlik doğrulaması başarısız oldu.'}); if(!isConfiguredAdmin(payload.email,payload.uid)||payload.uid!==req.user.uid)return res.status(403).json({ok:false,error:'Yönetici yetkisi doğrulanamadı.'}); const sessionToken=crypto.randomBytes(32).toString('hex'); const sessionId=crypto.randomBytes(12).toString('hex'); runtimeStore.temporary.set(`session:${sessionToken}`,{uid:payload.uid,email:payload.email,sessionSource:'admin_matrix',sessionId,at:now()},12*3600000); const clientKey=issueClientKey({uid:payload.uid,email:payload.email,sessionId}); res.setHeader('Set-Cookie',`pm_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`); res.json({ok:true,redirectTo:'/admin/admin.html',sessionToken,clientKey,admin:adminContext(payload.uid,payload.email)}); });
 router.get('/auth/admin/matrix/status',(req,res)=>{ const session=sessionFromReq(req); if(!session||!isConfiguredAdmin(session.email,session.uid))return res.status(401).json({ok:false,authenticated:false,redirectTo:'/admin/index.html',error:'Yönetici oturumu bulunamadı.'}); const keyState=verifyClientKey(req.headers['x-admin-client-key']||''); if(!keyState.ok)return res.status(403).json({ok:false,authenticated:true,redirectTo:'/admin/index.html',code:keyState.code,error:'Yönetici güvenlik anahtarı doğrulanamadı.'}); res.json({ok:true,authenticated:true,user:{uid:session.uid,email:session.email},admin:adminContext(session.uid,session.email),clientKey:issueClientKey({uid:session.uid,email:session.email,sessionId:session.sessionId||''})}); });
 router.post('/auth/admin/bootstrap', requireAuth, strictLimiter, (req,res)=>{ const uid=String(req.user?.uid||''); const email=String(req.user?.email||'').trim().toLowerCase(); if(!isConfiguredAdmin(email,uid))return res.status(403).json({ok:false,error:'ADMIN_REQUIRED'}); const sessionToken=crypto.randomBytes(32).toString('hex'); const sessionId=crypto.randomBytes(12).toString('hex'); runtimeStore.temporary.set(`session:${sessionToken}`,{uid,email,sessionSource:'firebase_admin_bootstrap',sessionId,at:now()},12*3600000); const clientKey=issueClientKey({uid,email,sessionId}); res.setHeader('Set-Cookie',`pm_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`); res.json({ok:true,authenticated:true,sessionToken,clientKey,admin:adminContext(uid,email)}); });
 router.post('/auth/admin/matrix/logout',(req,res)=>{ const token=String(req.headers['x-session-token']||'').trim(); if(token)runtimeStore.temporary.delete(`session:${token}`); res.setHeader('Set-Cookie','pm_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'); res.json({ok:true}); });
@@ -175,26 +177,42 @@ router.get('/notifications', requireAuth, (_req, res) => res.json({ ok: true, it
 router.post('/notifications/read', requireAuth, (_req, res) => res.json({ ok: true }));
 router.post('/notifications/read-all', requireAuth, (_req, res) => res.json({ ok: true }));
 router.post('/bonus/claim', requireAuth, (_req,res) => res.status(410).json({ ok:false, error:'USE_PROMO_CLAIM' }));
-router.get('/referral/link', requireAuth, (req, res) => { const uid = uidOf(req); const code = `PM-${uid.slice(0, 6).toUpperCase() || crypto.randomBytes(3).toString('hex').toUpperCase()}`; res.json({ ok: true, code, link: `${env.publicBaseUrl}/?ref=${encodeURIComponent(code)}` }); });
-router.post('/referral/claim', requireAuth, (_req, res) => res.status(410).json({ ok:false, error:'REFERRAL_CODE_VALIDATION_REQUIRED', message:'Doğrulanmış davet kaydı olmadan MC verilemez.' }));
+router.get('/referral/link',requireAuth,async(req,res,next)=>{
+ try{const {db}=fb();res.json({ok:true,...await referrals.referralLink(db,uidOf(req),env.publicBaseUrl)});}catch(err){next(err);}
+});
+router.post('/referral/bind',requireAuth,async(req,res,next)=>{
+ try{const {db}=fb();res.json(await referrals.bind(db,uidOf(req),req.body?.code));}
+ catch(err){if(err.statusCode)return res.status(err.statusCode).json({ok:false,error:err.message});next(err);}
+});
+router.post('/referral/claim',requireAuth,async(req,res,next)=>{
+ try{const {db}=fb();res.json(await referrals.claim(db,uidOf(req),emailVerified(req)));}
+ catch(err){if(err.statusCode)return res.status(err.statusCode).json({ok:false,error:err.message});next(err);}
+});
+
 
 router.post('/support/receipt', requireAuth, (req, res) => { const id = `support_${crypto.randomUUID()}`; const msg = { id, uid: uidOf(req), email: s(req.user?.email || '', 160), subject: sanitizeText(req.body?.subject || 'Destek', 120), source: sanitizeText(req.body?.source || req.headers.referer || 'home', 160), urgency: sanitizeText(req.body?.urgency || req.body?.priority || 'normal', 40), text: sanitizeText(req.body?.text || req.body?.message || req.body?.note || '', 1000), status: 'open', at: now() }; runtimeStore.support.set(id, msg, 24 * 3600000); console.info('[support:message]', JSON.stringify({ id, uid: msg.uid, source: msg.source, urgency: msg.urgency })); res.json({ ok: true, id, status: 'open', message: msg }); });
 router.post('/support/callback', requireAuth, (_req, res) => res.json({ ok: true }));
-router.get('/friends/list', requireAuth, (_req, res) => res.json({ ok: true, lists: { accepted: [], incoming: [], outgoing: [] }, counts: { accepted: 0, incoming: 0, outgoing: 0, online: 0 } }));
-router.post('/friends/request', requireAuth, (req, res) => res.json({ ok: true, message: 'Arkadaşlık isteği işlendi.', request: { targetUid: s(req.body?.targetUid || req.body?.target, 128), at: now() } }));
-router.post('/friends/respond', requireAuth, (_req, res) => res.json({ ok: true }));
-router.post('/friends/remove', requireAuth, (_req, res) => res.json({ ok: true }));
+const friendRoute=fn=>async(req,res,next)=>{try{res.json(await fn(req));}catch(error){if(error.statusCode)return res.status(error.statusCode).json({ok:false,error:error.message});next(error);}};
+router.get('/friends/list',requireAuth,friendRoute(req=>friendships.listForUi(uidOf(req))));
+router.post('/friends/request',requireAuth,friendRoute(async(req)=>{
+ const db=friendships.requireDb();
+ const target=await friendships.resolveTarget(db,req.body||{});
+ return friendships.requestFriend(db,uidOf(req),target);
+}));
+router.post('/friends/respond',requireAuth,friendRoute(req=>friendships.respond(friendships.requireDb(),uidOf(req),req.body.friendshipId,req.body.action)));
+router.post('/friends/remove',requireAuth,friendRoute(req=>friendships.remove(friendships.requireDb(),uidOf(req),req.body.friendshipId,req.body.targetUid)));
 router.get('/social-center/summary', requireAuth, async (req, res) => { const uid = uidOf(req); const online = presence.values().filter(x => Number(x?.at || 0) > Date.now() - 180000).length; let accepted = 0; let incoming = 0; try { const { db } = fb(); if (db && uid) { const snap = await db.collection('friendships').where('members','array-contains',uid).limit(100).get(); snap.docs.forEach((doc) => { const data = doc.data() || {}; if (data.status === 'accepted') accepted += 1; else if (data.toUid === uid && data.status === 'pending') incoming += 1; }); } } catch (_) {} const notificationCount = runtimeStore.notifications.values().filter(x => x && typeof x === 'object' && (!x.userId || x.userId === uid) && (!x.uid || x.uid === uid) && (!x.targetUid || x.targetUid === uid)).length; res.json({ ok: true, me: await readProfile(req), chatPolicy: CHAT_POLICY, counts: { friends: accepted, incoming, notifications: notificationCount, online }, features: { globalChat: true, localChat: true, dm: true, presence: 'memory' } }); });
 router.get('/activity-pass', requireAuth, (_req, res) => res.json({ ok: true, active: true, claimable: false }));
 router.post('/activity-pass/claim', requireAuth, (_req, res) => res.json({ ok: true, claimed: false }));
 router.get('/chat/settings', requireAuth, (req, res) => res.json({ ok: true, mine: {}, theirs: {}, targetUid: s(req.query.targetUid, 128), policy: CHAT_POLICY }));
-router.get('/chat/direct/list', requireAuth, (req, res) => { const uid = uidOf(req); const items = dm.entries().filter(([key]) => key.includes(uid)).map(([key, list]) => { const peerUid = key.split('_').find(x => x !== uid) || ''; const last = Array.isArray(list) ? list[list.length - 1] : null; return { peerUid, uid: peerUid, username: peerUid ? `Oyuncu ${peerUid.slice(0, 6)}` : 'DM', lastMessage: last?.text || last?.message || '', lastAt: last?.at || 0, unread: 0 }; }).sort((a,b)=>b.lastAt-a.lastAt); res.json({ ok: true, items }); });
-router.get('/chat/direct/search', requireAuth, (req, res) => { const uid = uidOf(req); const q = s(req.query.q || req.query.query || '', 80).toLowerCase(); const items = []; for (const [key, list] of dm.entries()) { if (!key.includes(uid) || !Array.isArray(list)) continue; for (const msg of list) { const text = String(msg?.text || msg?.message || ''); if (!q || text.toLowerCase().includes(q)) items.push({ ...msg, peerUid: key.split('_').find(x => x !== uid) || '' }); } } res.json({ ok: true, items: items.slice(-100).reverse(), nextCursor: '' }); });
-router.get('/chat/direct/history', requireAuth, (req, res) => { const key = [uidOf(req), s(req.query.targetUid || req.query.peerUid, 128)].sort().join('_'); const items = dm.get(key) || []; res.json({ ok: true, items, messages: items, nextCursor: '', policy: CHAT_POLICY }); });
-router.get('/chat/direct/unread-summary', requireAuth, (_req, res) => res.json({ ok: true, byPeer: {}, total: 0 }));
-['edit','delete','archive','unarchive'].forEach(a => router.post(`/chat/direct/${a}`, requireAuth, (_req, res) => res.json({ ok: true })));
-['block','unblock','mute','unmute','report'].forEach(a => router.post(`/chat/${a}`, requireAuth, (_req, res) => res.json({ ok: true })));
-
+router.get('/chat/direct/list', requireAuth, async (req,res,next)=>{try{res.json({ok:true,items:await messages.inbox(uidOf(req))});}catch(error){next(error);}});
+router.get('/chat/direct/history', requireAuth, async (req,res,next)=>{try{const items=await messages.history(uidOf(req),s(req.query.targetUid||req.query.peerUid,128));res.json({ok:true,items,messages:items,nextCursor:'',policy:CHAT_POLICY});}catch(error){next(error);}});
+router.get('/chat/direct/unread-summary', requireAuth, (_req,res)=>res.json({ok:true,byPeer:{},total:0}));
+// Unsupported mutations never claim to have edited or deleted a message.
+['edit','delete','archive','unarchive'].forEach(a=>router.post(`/chat/direct/${a}`,requireAuth,(_req,res)=>res.status(501).json({ok:false,error:'MESSAGE_ACTION_NOT_AVAILABLE'})));
+router.post('/chat/block',requireAuth,async(req,res,next)=>{try{res.json(await messages.setBlocked(uidOf(req),s(req.body.targetUid||req.body.peerUid,128),true));}catch(e){next(e);}});
+router.post('/chat/unblock',requireAuth,async(req,res,next)=>{try{res.json(await messages.setBlocked(uidOf(req),s(req.body.targetUid||req.body.peerUid,128),false));}catch(e){next(e);}});
+['mute','unmute','report'].forEach(a=>router.post(`/chat/${a}`,requireAuth,(_req,res)=>res.status(501).json({ok:false,error:'MESSAGE_ACTION_NOT_AVAILABLE'})));
 
 router.get('/chat/policy', requireAuth, (_req, res) => res.json({ ok: true, policy: CHAT_POLICY }));
 router.get('/support/meta', requireAuth, (_req, res) => res.json({ ok: true, categories: ['Hesap', 'Oyun', 'Ödeme', 'Teknik'], channels: ['ticket', 'callback'], memoryOnlyLogs: true }));

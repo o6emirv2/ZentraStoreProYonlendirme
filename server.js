@@ -11,7 +11,8 @@ const firebase = require('./server-config-firebaseAdmin.js');
 const { apiLimiter } = require('./server-core-security.js');
 const { routeData } = require('./server-core-smartDataRouter.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
-const { globalChat, localChat, dm, presence } = require('./server-social-socialRuntimeStore.js');
+const {presence} = require('./server-social-socialRuntimeStore.js');
+const messages=require('./server-social-messageService.js');
 const { runSafeFirestoreCleanup } = require('./server-core-firestoreCleanupService.js');
 const { protectAsyncRoutes } = require('./server-core-asyncRoutes.js');
 const dataReadiness = require('./server-core-dataReadiness.js');
@@ -26,6 +27,8 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: env.allowedOrigins, credentials: true } });
 
 app.disable('x-powered-by');
+// Render terminates HTTPS at one trusted reverse proxy; required for accurate IP rate limiting.
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(compression());
 app.use(cors(corsOptions));
@@ -113,6 +116,7 @@ app.use('/api', protectAsyncRoutes(require('./server-routes-notification.routes.
 app.use('/api', protectAsyncRoutes(require('./server-routes-social.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-email.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-wheel.routes.js')));
+app.use('/api', protectAsyncRoutes(require('./server-routes-bot-config.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-promo.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-support.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-compat.routes.js')));
@@ -125,7 +129,6 @@ app.use(['/api/games/chess','/api/chess'], protectAsyncRoutes(chessGame.router))
 app.use(['/api/games/pisti','/api/pisti-online'], protectAsyncRoutes(pistiGame.router));
 app.use(['/api/games/snake-pro','/api/games/snake'], protectAsyncRoutes(require('./server-games-snake-pro-index.js').router));
 app.use(['/api/games/space-pro','/api/games/space'], protectAsyncRoutes(require('./server-games-space-pro-index.js').router));
-app.use('/api/games/pattern-master', protectAsyncRoutes(require('./server-games-pattern-master-index.js').router));
 
 async function captureClientError(req, res) {
   const payload = { ...(req.body || {}), path: req.body?.path || req.headers.referer || '', userAgent: req.headers['user-agent'] || '', at: Date.now() };
@@ -192,8 +195,7 @@ app.post('/api/client-errors', captureClientError);
 const gamePages = Object.freeze({
   'crash': 'crash', 'chess': 'chess', 'satranc': 'chess', 'satranç': 'chess',
   'pisti': 'pisti', 'pişti': 'pisti', 'snake': 'snake-pro', 'snakepro': 'snake-pro', 'snake-pro': 'snake-pro',
-  'space': 'space-pro', 'spacepro': 'space-pro', 'space-pro': 'space-pro', 'pattern-master': 'pattern-master',
-  'patternmaster': 'pattern-master'
+  'space': 'space-pro', 'spacepro': 'space-pro', 'space-pro': 'space-pro'
 });
 function sendGamePage(slug, res, next) {
   const safeSlug = gamePages[String(slug || '').toLowerCase()] || '';
@@ -208,13 +210,12 @@ const legacyGameAliases = Object.freeze({
   '/Online Oyunlar/Pisti.html': '/games/pisti', '/Online Oyunlar/Pisti': '/games/pisti', '/Online%20Oyunlar/Pisti.html': '/games/pisti', '/Pisti.html': '/games/pisti', '/pisti': '/games/pisti',
   '/Online Oyunlar/Satranc.html': '/games/chess', '/Online Oyunlar/Satranc': '/games/chess', '/Online%20Oyunlar/Satranc.html': '/games/chess', '/Satranc.html': '/games/chess', '/satranc': '/games/chess',
   '/Klasik Oyunlar/SnakePro.html': '/games/snake-pro', '/Klasik Oyunlar/SnakePro': '/games/snake-pro', '/Klasik%20Oyunlar/SnakePro.html': '/games/snake-pro', '/games/snake': '/games/snake-pro',
-  '/Klasik Oyunlar/SpacePro.html': '/games/space-pro', '/Klasik Oyunlar/SpacePro': '/games/space-pro', '/Klasik%20Oyunlar/SpacePro.html': '/games/space-pro', '/games/space': '/games/space-pro',
-  '/Klasik Oyunlar/PatternMaster.html': '/games/pattern-master', '/Klasik Oyunlar/PatternMaster': '/games/pattern-master', '/Klasik%20Oyunlar/PatternMaster.html': '/games/pattern-master'
+  '/Klasik Oyunlar/SpacePro.html': '/games/space-pro', '/Klasik Oyunlar/SpacePro': '/games/space-pro', '/Klasik%20Oyunlar/SpacePro.html': '/games/space-pro', '/games/space': '/games/space-pro'
 });
 for (const [from, to] of Object.entries(legacyGameAliases)) app.get(from, (_req, res) => res.redirect(302, to));
 
 const CHAT_POLICY = Object.freeze({
-  memoryOnly: true,
+  memoryOnly: false,
   lobbyDays: 7,
   directDays: 14,
   lobbyLabel: 'Global 7 Gün',
@@ -222,11 +223,10 @@ const CHAT_POLICY = Object.freeze({
   summaryLabel: 'Global 7 Gün · DM 14 Gün',
   manualDeleteLabel: 'Kullanıcı tarafından silindi',
   cleanupLabel: 'Saklama süresi dolduğu için temizlendi',
-  lobbyDisclosure: 'Yerel sohbet mesajları Render in-memory içinde tutulur; restart olursa silinir, en fazla 7 gün görünür.',
-  directDisclosure: 'DM mesajları Render in-memory içinde tutulur; restart olursa silinir, en fazla 14 gün görünür.',
+  lobbyDisclosure: 'Yerel sohbet mesajları kalıcı kaydedilir.',
+  directDisclosure: 'Özel mesajlar kalıcı kaydedilir.',
   tombstoneDisclosure: 'Silinen mesaj içerikleri boş gösterilir; manuel silme ve süre temizliği ayrı etiketlenir.',
-  searchDisclosure: 'Mesaj arama yalnızca aktif in-memory mesajlarda çalışır.',
-  transparencyNote: 'Bu alan Firebase maliyeti oluşturmadan geçici çalışır.'
+  transparencyNote: 'Mesaj geçmişi oturum doğrulamasıyla korunur.'
 });
 function sanitizeSocketText(value = '', max = 500) { return String(value || '').trim().replace(/[<>]/g, '').slice(0, max); }
 async function authenticateSocket(socket) {
@@ -245,33 +245,52 @@ async function authenticateSocket(socket) {
   }
   return socket.data || {};
 }
-function publicLobbyMessages() {
-  return localChat.values().sort((a,b)=>Number(a.at||0)-Number(b.at||0)).slice(-100);
-}
-function directKey(a, b) { return [String(a || ''), String(b || '')].filter(Boolean).sort().join('_'); }
 function emitCallback(done, payload) { if (typeof done === 'function') { try { done(payload); } catch (_) {} } }
 io.on('connection', socket => {
   runtimeStore.presence.set(socket.id, { socketId: socket.id, at: Date.now() });
   authenticateSocket(socket).catch(() => null);
-  socket.on('presence:update', async data => { const ctx = await authenticateSocket(socket); const uid = ctx.pmUid || data?.uid || socket.id; const row = { socketId: socket.id, uid, ...data, at: Date.now() }; runtimeStore.presence.set(socket.id, row); if (uid) presence.set(uid, row); io.emit('social:presence_update', row); });
-  socket.on('social:set_presence', async data => { const ctx = await authenticateSocket(socket); const uid = ctx.pmUid || data?.uid || socket.id; const row = { socketId: socket.id, uid, ...data, at: Date.now() }; runtimeStore.presence.set(socket.id, row); if (uid) presence.set(uid, row); io.emit('social:presence_update', row); });
-  socket.on('chat:lobby_load_history', async (_data, done) => { await authenticateSocket(socket); const payload = { ok:true, policy: CHAT_POLICY, messages: publicLobbyMessages() }; socket.emit('chat:lobby_history', payload); emitCallback(done, payload); });
-  socket.on('chat:lobby_send', async (data = {}, done) => {
-    const ctx = await authenticateSocket(socket);
-    const uid = ctx.pmUid || '';
-    if (!uid) { const out = { ok:false, error:'AUTH_REQUIRED', message:'Mesaj için oturum gerekli.' }; socket.emit('chat:lobby_error', out); return emitCallback(done, out); }
-    const message = sanitizeSocketText(data.message || data.text || '', 280);
-    if (!message) { const out = { ok:false, error:'EMPTY_MESSAGE', message:'Mesaj boş bırakılamaz.' }; socket.emit('chat:lobby_error', out); return emitCallback(done, out); }
-    const msg = { id:`lobby_${Date.now()}_${Math.random().toString(36).slice(2)}`, uid, username:sanitizeSocketText(data.username || ctx.pmEmail || 'Oyuncu', 80), avatar:sanitizeSocketText(data.avatar || '', 500), text:message, message, at:Date.now(), scope:'tr' };
-    localChat.set(msg.id, msg, 7 * 86400000);
-    io.emit('chat:lobby_new', msg);
-    emitCallback(done, { ok:true, message:msg, policy:CHAT_POLICY });
+  socket.on('presence:update', async data => { const ctx = await authenticateSocket(socket); const uid = ctx.pmUid || ''; if (!uid) return; const row = { socketId: socket.id, ...data, uid, at: Date.now() }; runtimeStore.presence.set(socket.id, row); if (uid) presence.set(uid, row); io.emit('social:presence_update', row); });
+  socket.on('social:set_presence', async data => { const ctx = await authenticateSocket(socket); const uid = ctx.pmUid || ''; if (!uid) return; const row = { socketId: socket.id, ...data, uid, at: Date.now() }; runtimeStore.presence.set(socket.id, row); if (uid) presence.set(uid, row); io.emit('social:presence_update', row); });
+  socket.on('chat:lobby_load_history',async (_data,done)=>{
+    try{const ctx=await authenticateSocket(socket);if(!ctx.pmUid)throw Object.assign(new Error('AUTH_REQUIRED'),{statusCode:401});const result={ok:true,policy:CHAT_POLICY,messages:await messages.lobbyHistory()};socket.emit('chat:lobby_history',result);emitCallback(done,result);}
+    catch(error){emitCallback(done,{ok:false,error:error.message||'CHAT_UNAVAILABLE'});}
   });
-  socket.on('chat:dm_load_history', async (data = {}, done) => { const ctx = await authenticateSocket(socket); const uid = ctx.pmUid || ''; const targetUid = sanitizeSocketText(data.targetUid || data.peerUid || '', 160); const key = directKey(uid, targetUid); const messages = key ? (dm.get(key) || []) : []; const payload = { ok:true, targetUid, peerUid:targetUid, messages, policy:CHAT_POLICY }; socket.emit('chat:dm_history', payload); emitCallback(done, payload); });
-  socket.on('chat:dm_send', async (data = {}, done) => { const ctx = await authenticateSocket(socket); const fromUid = ctx.pmUid || ''; const toUid = sanitizeSocketText(data.toUid || data.targetUid || '', 160); const message = sanitizeSocketText(data.message || data.text || '', 500); if (!fromUid || !toUid || !message) { const out = { ok:false, error:'DM_INVALID_PAYLOAD', message:'DM için kullanıcı ve mesaj gerekli.' }; socket.emit('chat:dm_error', out); return emitCallback(done, out); } const key = directKey(fromUid, toUid); const list = dm.get(key) || []; const msg = { id:`dm_${Date.now()}_${Math.random().toString(36).slice(2)}`, clientTempId:data.clientTempId || '', fromUid, byUid:fromUid, toUid, targetUid:toUid, text:message, message, at:Date.now() }; const next = [...list, msg].slice(-200); dm.set(key, next, 14 * 86400000); socket.emit('chat:dm_success', { ok:true, targetUid:toUid, clientTempId:data.clientTempId, message:msg }); socket.emit('chat:dm_new', msg); io.to(`user:${toUid}`).emit('chat:dm_new', msg); emitCallback(done, { ok:true, message:msg }); });
+  socket.on('chat:lobby_send',async(data={},done)=>{
+    try{
+      const ctx=await authenticateSocket(socket);if(!ctx.pmUid)throw Object.assign(new Error('AUTH_REQUIRED'),{statusCode:401});
+      const msg=await messages.sendLobby(ctx.pmUid,data.message||data.text,ctx.pmEmail?.split('@')[0]||'Oyuncu');
+      io.emit('chat:lobby_new',msg);emitCallback(done,{ok:true,message:msg,policy:CHAT_POLICY});
+    }catch(error){const result={ok:false,error:error.message||'CHAT_UNAVAILABLE'};socket.emit('chat:lobby_error',result);emitCallback(done,result);}
+  });
+  socket.on('chat:dm_load_history',async(data={},done)=>{
+    try{const ctx=await authenticateSocket(socket);if(!ctx.pmUid)throw Object.assign(new Error('AUTH_REQUIRED'),{statusCode:401});
+      const targetUid=sanitizeSocketText(data.targetUid||data.peerUid||'',160),history=await messages.history(ctx.pmUid,targetUid);
+      const result={ok:true,targetUid,peerUid:targetUid,messages:history,policy:CHAT_POLICY};socket.emit('chat:dm_history',result);emitCallback(done,result);
+    }catch(error){emitCallback(done,{ok:false,error:error.message||'CHAT_UNAVAILABLE'});}
+  });
+  socket.on('chat:dm_send',async(data={},done)=>{
+    try{const ctx=await authenticateSocket(socket);if(!ctx.pmUid)throw Object.assign(new Error('AUTH_REQUIRED'),{statusCode:401});
+      const toUid=sanitizeSocketText(data.toUid||data.targetUid||'',160);
+      const msg=await messages.sendDm(ctx.pmUid,toUid,data.message||data.text,data.clientTempId);
+      socket.emit('chat:dm_success',{ok:true,targetUid:toUid,clientTempId:data.clientTempId,message:msg});
+      socket.emit('chat:dm_new',msg);io.to(`user:${toUid}`).emit('chat:dm_new',msg);
+      emitCallback(done,{ok:true,message:msg});
+    }catch(error){const result={ok:false,error:error.message||'CHAT_UNAVAILABLE'};socket.emit('chat:dm_error',result);emitCallback(done,result);}
+  });
   socket.on('chat:typing', async (data = {}) => { const ctx = await authenticateSocket(socket); const fromUid = ctx.pmUid || ''; const toUid = sanitizeSocketText(data.toUid || data.targetUid || '', 160); if (fromUid && toUid) io.to(`user:${toUid}`).emit('chat:typing_status', { fromUid, isTyping: !!data.isTyping, at:Date.now() }); });
-  socket.on('game:invite_send', async (data = {}, done) => { const ctx = await authenticateSocket(socket); const hostUid = ctx.pmUid || ''; const targetUid = sanitizeSocketText(data.targetUid || '', 160); if (!hostUid || !targetUid) { const out = { ok:false, error:'INVITE_INVALID_PAYLOAD', message:'Davet için hedef kullanıcı gerekli.' }; socket.emit('game:invite_error', out); return emitCallback(done, out); } const invite = { id:`invite_${Date.now()}_${Math.random().toString(36).slice(2)}`, inviteId:`invite_${Date.now()}_${Math.random().toString(36).slice(2)}`, hostUid, targetUid, roomId:sanitizeSocketText(data.roomId || '', 160), gameKey:sanitizeSocketText(data.gameKey || data.gameCode || 'chess', 40), gameName:sanitizeSocketText(data.gameName || 'Oyun Daveti', 80), at:Date.now() }; runtimeStore.gameInvites.set(invite.id, invite, 90 * 1000); io.to(`user:${targetUid}`).emit('game:invite_receive', invite); socket.emit('game:invite_success', invite); emitCallback(done, { ok:true, ...invite }); });
-  socket.on('game:invite_response', data => socket.broadcast.emit('game:invite_response', { ...(data || {}), at: Date.now() }));
+  socket.on('game:invite_send', async (data = {}, done) => { const ctx = await authenticateSocket(socket); const hostUid = ctx.pmUid || ''; const targetUid = sanitizeSocketText(data.targetUid || '', 160); if (!hostUid || !targetUid) { const out = { ok:false, error:'INVITE_INVALID_PAYLOAD', message:'Davet için hedef kullanıcı gerekli.' }; socket.emit('game:invite_error', out); return emitCallback(done, out); } const inviteId=`invite_${crypto.randomUUID()}`; const invite = { id:inviteId, inviteId, hostUid, targetUid, roomId:sanitizeSocketText(data.roomId || '', 160), gameKey:sanitizeSocketText(data.gameKey || data.gameCode || 'chess', 40), gameName:sanitizeSocketText(data.gameName || 'Oyun Daveti', 80), at:Date.now() }; runtimeStore.gameInvites.set(invite.id, invite, 90 * 1000); io.to(`user:${targetUid}`).emit('game:invite_receive', invite); socket.emit('game:invite_success', invite); emitCallback(done, { ok:true, ...invite }); });
+  socket.on('game:invite_response',async (data={},done)=>{
+    const ctx=await authenticateSocket(socket);
+    const uid=ctx.pmUid||'';
+    const inviteId=String(data.inviteId||'');
+    const invite=runtimeStore.gameInvites.get(inviteId);
+    if(!uid||!invite||invite.targetUid!==uid)return emitCallback(done,{ok:false,error:'INVITE_NOT_FOUND'});
+    if(!['accepted','rejected'].includes(String(data.response)))return emitCallback(done,{ok:false,error:'INVALID_INVITE_RESPONSE'});
+    runtimeStore.gameInvites.delete(inviteId);
+    const out={...invite,response:data.response,guestUid:uid,at:Date.now()};
+    io.to(`user:${invite.hostUid}`).emit('game:invite_response',out);
+    emitCallback(done,{ok:true,...out});
+  });
   socket.on('game:matchmake_join', data => socket.emit('game:matchmake_joined', { ok:true, queued:false, gameType:data?.gameType || data?.game || 'unknown', message:'HTTP lobby active' }));
   socket.on('game:matchmake_leave', () => socket.emit('game:matchmake_left', { ok:true }));
   socket.on('client:error', data => {

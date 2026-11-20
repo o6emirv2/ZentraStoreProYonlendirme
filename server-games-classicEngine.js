@@ -1,53 +1,70 @@
+'use strict';
 const express = require('express');
 const crypto = require('crypto');
+const { requireAuth } = require('./server-core-security.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
-const { runtimeStore } = require('./server-core-runtimeStore.js');
 
-function optionalAuth(req, _res, next) {
-  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
-  const { auth } = initFirebaseAdmin();
-  if (!auth || !token) return next();
-  auth.verifyIdToken(token).then((user) => { req.user = user; next(); }).catch(() => next());
-}
-function gameConfig(game) {
-  const map = {
-    'pattern-master': { maxScore: 25000, minDurationMs: 1500 },
-    'space-pro': { maxScore: 200000, minDurationMs: 2500 },
-    'snake-pro': { maxScore: 100000, minDurationMs: 1800 }
-  };
-  return map[game] || map['pattern-master'];
+const LIMITS = Object.freeze({
+  'space-pro': Object.freeze({ maxScore: 200000, minDurationMs: 2500 }),
+  'snake-pro': Object.freeze({ maxScore: 100000, minDurationMs: 1800 })
+});
+const MAX_RUN_MS = 6 * 3600000;
+function domainError(code, statusCode = 400) {
+  const error = new Error(code);
+  error.statusCode = statusCode;
+  return error;
 }
 function validateScore(game, score, durationMs) {
-  const cfg = gameConfig(game);
-  const safeScore = Math.max(0, Math.min(cfg.maxScore, Math.trunc(Number(score) || 0)));
-  const safeDuration = Math.max(0, Math.trunc(Number(durationMs) || 0));
-  const impossible = safeScore > cfg.maxScore || safeDuration < cfg.minDurationMs || safeScore / Math.max(1, safeDuration / 1000) > cfg.maxScore / 20;
-  return { score: safeScore, durationMs: safeDuration, suspicious: impossible };
+  const config = LIMITS[game];
+  if (!config) throw domainError('GAME_REMOVED', 410);
+  const rawScore = Number(score);
+  if (!Number.isSafeInteger(rawScore) || rawScore < 0 || rawScore > config.maxScore) throw domainError('INVALID_SCORE');
+  const elapsed = Number(durationMs);
+  if (!Number.isFinite(elapsed) || elapsed < config.minDurationMs || elapsed > MAX_RUN_MS) throw domainError('INVALID_RUN_DURATION');
+  // Client-side arcade scores are untrusted. Never credit MC or levels for them.
+  return { score: rawScore, durationMs: Math.trunc(elapsed), unverifiedClientScore: true };
 }
 function createClassicRouter(game) {
+  if (!LIMITS[game]) throw domainError('GAME_REMOVED', 410);
   const router = express.Router();
-  router.post('/start', optionalAuth, (req, res) => {
-    const runId = `${game}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    runtimeStore.temporary.set(`classic:${runId}`, { game, uid: req.user?.uid || '', startedAt: Date.now(), finished: false }, 6 * 3600000);
-    res.json({ ok: true, game, runId, startedAt: Date.now() });
-  });
-  router.post('/submit', optionalAuth, async (req, res) => {
-    const runId = String(req.body.runId || `${game}_legacy_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`);
-    const existing = runtimeStore.temporary.get(`classic:done:${runId}`);
-    if (existing) return res.json({ ok: true, duplicate: true, ...existing });
-    const calc = validateScore(game, req.body.score, req.body.durationMs);
-    const uid = req.user?.uid || '';
+  router.post('/start', requireAuth, async (req, res) => {
+    const uid = String(req.user?.uid || '');
     const { db } = initFirebaseAdmin();
-    if (db && uid) {
-      const runRef = db.collection('classicGameRuns').doc(runId);
-      await db.runTransaction(async tx => {
-        if ((await tx.get(runRef)).exists) return;
-        tx.create(runRef, { uid, game, score: calc.score, durationMs: calc.durationMs, suspicious: calc.suspicious, at: Date.now() });
+    if (!uid) return res.status(401).json({ ok: false, error: 'AUTH_REQUIRED' });
+    if (!db) return res.status(503).json({ ok: false, error: 'DATA_NOT_READY' });
+    const runId = `${game}_${crypto.randomUUID()}`;
+    const startedAt = Date.now();
+    await db.collection('classicGameRuns').doc(runId).create({ uid, game, status: 'started', startedAt, expiresAt: startedAt + MAX_RUN_MS });
+    return res.status(201).json({ ok: true, game, runId, startedAt });
+  });
+  router.post('/submit', requireAuth, async (req, res) => {
+    const { db } = initFirebaseAdmin();
+    const uid = String(req.user?.uid || '');
+    if (!uid) return res.status(401).json({ ok: false, error: 'AUTH_REQUIRED' });
+    if (!db) return res.status(503).json({ ok: false, error: 'DATA_NOT_READY' });
+    const runId = String(req.body?.runId || '').trim();
+    if (!new RegExp(`^${game}_[0-9a-f-]{36}$`, 'i').test(runId)) return res.status(400).json({ ok: false, error: 'INVALID_RUN_ID' });
+    const runRef = db.collection('classicGameRuns').doc(runId);
+    const now = Date.now();
+    let result;
+    try {
+      result = await db.runTransaction(async tx => {
+        const snapshot = await tx.get(runRef);
+        if (!snapshot.exists) throw domainError('RUN_NOT_FOUND', 404);
+        const run = snapshot.data();
+        if (run.uid !== uid || run.game !== game) throw domainError('FORBIDDEN', 403);
+        if (run.status === 'finished') return { ...run.result, duplicate: true };
+        if (run.status !== 'started' || now > run.startedAt + MAX_RUN_MS) throw domainError('RUN_EXPIRED', 409);
+        const calc = validateScore(game, req.body?.score, now - run.startedAt);
+        const result = { game, runId, ...calc, savedAt: now };
+        tx.update(runRef, { status: 'finished', finishedAt: now, result });
+        return result;
       });
+    } catch (error) {
+      if (error.statusCode) return res.status(error.statusCode).json({ ok: false, error: error.message });
+      throw error;
     }
-    const result = { game, runId, score: calc.score, durationMs: calc.durationMs, suspicious: calc.suspicious };
-    runtimeStore.temporary.set(`classic:done:${runId}`, result, 30 * 86400000);
-    res.json({ ok: true, ...result });
+    return res.json({ ok: true, ...result });
   });
   return router;
 }

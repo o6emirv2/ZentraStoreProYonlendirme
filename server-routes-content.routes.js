@@ -10,11 +10,11 @@ const DEFAULT_CONTENT = Object.freeze({
   gamesTitle: 'Oyun Vitrini',
   gamesSubtitle: 'Strateji, refleks ve beceri oyunlarını tek bir yerde keşfet.',
   announcement: 'Yeni üyeliğe 1.000 MC, e-posta doğrulamasına 2.000 MC.',
-  gameTitles: { crash:'Crash', chess:'Satranç', pisti:'Pişti', pattern:'Pattern Master', space:'Space Pro', snake:'Snake Pro' },
-  gameDescriptions: { crash:'Zamanlama ve refleks oyunu.', chess:'Strateji ve planlamada kendini geliştir.', pisti:'Kart takibi ve çevrimiçi oyun.', pattern:'Şekilleri öğren ve serileri tamamla.', space:'Uzayda hayatta kalma mücadelesi.', snake:'Klasik yılan oyununu yeniden keşfet.' }
+  gameTitles: { crash:'Crash', chess:'Satranç', pisti:'Pişti', space:'Space Pro', snake:'Snake Pro' },
+  gameDescriptions: { crash:'Zamanlama ve refleks oyunu.', chess:'Strateji ve planlamada kendini geliştir.', pisti:'Kart takibi ve çevrimiçi oyun.', space:'Uzayda hayatta kalma mücadelesi.', snake:'Klasik yılan oyununu yeniden keşfet.' }
 });
 const LIMITS = Object.freeze({ heroTitle: 90, heroDescription: 420, gamesTitle: 70, gamesSubtitle: 220, announcement: 180 });
-const GAME_KEYS = Object.freeze(['crash','chess','pisti','pattern','space','snake']);
+const GAME_KEYS = Object.freeze(['crash','chess','pisti','space','snake']);
 const sanitizeText = (value, fallback, max) => typeof value === 'string' ? (value.trim().replace(/[\u0000-\u001f<>]/g, '').slice(0,max) || fallback) : fallback;
 const clean = (values = {}) => ({
   ...Object.fromEntries(Object.entries(LIMITS).map(([key,max]) => [key, sanitizeText(values[key], DEFAULT_CONTENT[key], max)])),

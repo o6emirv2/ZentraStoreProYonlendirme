@@ -2,7 +2,7 @@ const express = require('express');
 const { requireAuth } = require('./server-core-security.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
-const { dm } = require('./server-social-socialRuntimeStore.js');
+const messages = require('./server-social-messageService.js');
 const { shouldShowNotification, markNotificationShown } = require('./server-core-notificationService.js');
 
 const router = express.Router();
@@ -97,19 +97,6 @@ function runtimeNotifications(uid) {
       at: invite.at
     }));
   }
-  for (const [key, list] of dm.entries()) {
-    if (!key.includes(uid) || !Array.isArray(list)) continue;
-    const last = [...list].reverse().find((msg) => msg && msg.fromUid && msg.fromUid !== uid);
-    if (!last) continue;
-    items.push(normalizeNotification(last, {
-      id: `dm_${last.id || key}`,
-      type: 'dm',
-      title: 'Yeni özel mesaj',
-      message: last.text || last.message || '',
-      source: 'social-center',
-      at: last.at
-    }));
-  }
   return items;
 }
 
@@ -118,7 +105,13 @@ async function listNotifications(req, { includeDismissed = false } = {}) {
   const limit = Math.max(1, Math.min(80, Number(req.query.limit || 24) || 24));
   const { db } = initFirebaseAdmin();
   const merged = new Map();
-  for (const item of [...await firestoreNotifications(db, uid, limit), ...runtimeNotifications(uid)]) {
+  const dmRows = db ? await messages.inbox(uid) : [];
+  const dmItems = dmRows.filter(row=>row.lastAt>0).map(row=>normalizeNotification({
+    id:`dm_${row.peerUid}_${row.lastAt}`,
+    type:'dm',title:'Yeni özel mesaj',message:row.lastMessage,
+    at:row.lastAt,source:'social-center'
+  }));
+  for (const item of [...await firestoreNotifications(db, uid, limit), ...runtimeNotifications(uid), ...dmItems]) {
     if (item.id) merged.set(item.id, item);
   }
   const receipts = await readReceipts(db, uid, [...merged.keys()]);

@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const { wager, hundredths, validateCrashPlan } = require('./server-core-gamePolicy.js');
 const { requireAuth, requireAdmin } = require('./server-core-security.js');
 const { debitBalance, creditBalance, readBalance } = require('./server-core-economyService.js');
 const { getProgression } = require('./server-core-progressionService.js');
@@ -11,10 +12,10 @@ const router = express.Router();
 
 const WAIT_MS = 5000;
 const CRASHED_HOLD_MS = 2400;
-const MAX_MULT = 10000;
-const MIN_BET = 1;
-const MAX_BET = 1_000_000;
-const MIN_AUTO_CASHOUT = 2;
+const MAX_MULT = 100;
+const MIN_BET = 10;
+const MAX_BET = 5000;
+const MIN_AUTO_CASHOUT = 1.05;
 const MAX_AUTO_CASHOUT = 100;
 const TICK_MS = 80;
 const STATE_EMIT_MIN_MS = 120;
@@ -28,20 +29,20 @@ const uidOf = (req) => String(req.user?.uid || '');
 const hashPlayerKey = (uid, roundId = '') => crypto.createHash('sha256').update(`${roundId}:${uid || ''}`).digest('hex').slice(0, 12);
 
 const DEFAULT_RISK = Object.freeze([
-  { min: 1.01, max: 1.50, weight: 34 },
+  { min: 1.05, max: 1.50, weight: 34 },
   { min: 1.51, max: 2.00, weight: 26 },
   { min: 2.01, max: 5.00, weight: 18 },
   { min: 5.01, max: 10.00, weight: 10 },
-  { min: 10.01, max: 50.00, weight: 7 },
-  { min: 50.01, max: 100.00, weight: 3 },
-  { min: 100.01, max: 1000.00, weight: 1.5 },
-  { min: 1000.01, max: 10000.00, weight: 0.5 }
+  { min: 10.01, max: 20.00, weight: 7 },
+  { min: 20.01, max: 40.00, weight: 3 },
+  { min: 40.01, max: 70.00, weight: 1.5 },
+  { min: 70.01, max: 100.00, weight: 0.5 }
 ]);
 
 const state = {
   phase: 'COUNTDOWN',
   roundId: '',
-  crashPoint: 1.01,
+  crashPoint: 1.05,
   startedAt: 0,
   countdownUntil: 0,
   multiplier: 1,
@@ -49,6 +50,11 @@ const state = {
   history: [],
   risk: validateRiskTable(DEFAULT_RISK, { useDefaultOnInvalid: true }).rows,
   riskLoaded: false,
+  mode: "weighted",
+  plan: [],
+  planCursor: 0,
+  settingsVersion: 0,
+  lockedRound: null,
   riskLoadPromise: null,
   roundStartPromise: null,
   io: null,
@@ -84,12 +90,7 @@ function safeAvatarUrl(value = '') {
 }
 
 function parseBetAmount(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) throw makeHttpError('INVALID_BET_AMOUNT', 400);
-  if (!Number.isInteger(n)) throw makeHttpError('BET_AMOUNT_MUST_BE_INTEGER', 400);
-  if (n < MIN_BET) throw makeHttpError('BET_AMOUNT_TOO_LOW', 400);
-  if (n > MAX_BET) throw makeHttpError('BET_AMOUNT_TOO_HIGH', 400);
-  return n;
+  return wager('crash',value);
 }
 
 function parseAutoCashout(value) {
@@ -98,7 +99,7 @@ function parseAutoCashout(value) {
   if (!Number.isFinite(n)) throw makeHttpError('INVALID_AUTO_CASHOUT', 400);
   if (n < MIN_AUTO_CASHOUT) throw makeHttpError('AUTO_CASHOUT_TOO_LOW', 400);
   if (n > MAX_AUTO_CASHOUT) throw makeHttpError('AUTO_CASHOUT_TOO_HIGH', 400);
-  return round(n, 2);
+  return hundredths(n) / 100;
 }
 
 function validateRiskTable(rows = [], { useDefaultOnInvalid = false } = {}) {
@@ -108,15 +109,15 @@ function validateRiskTable(rows = [], { useDefaultOnInvalid = false } = {}) {
   if (!clean.length) errors.push('RISK_TABLE_EMPTY');
   clean.forEach((row, index) => {
     if (!Number.isFinite(row.min) || !Number.isFinite(row.max) || !Number.isFinite(row.weight)) errors.push(`ROW_${index + 1}_NOT_NUMERIC`);
-    if (row.min < 1.01) errors.push(`ROW_${index + 1}_MIN_TOO_LOW`);
+    if (row.min < 1.05) errors.push(`ROW_${index + 1}_MIN_TOO_LOW`);
     if (row.max > MAX_MULT) errors.push(`ROW_${index + 1}_MAX_TOO_HIGH`);
     if (row.max < row.min) errors.push(`ROW_${index + 1}_MAX_LT_MIN`);
     if (row.weight <= 0) errors.push(`ROW_${index + 1}_WEIGHT_INVALID`);
   });
   const sorted = clean.slice().sort((a, b) => a.min - b.min || a.max - b.max);
   if (sorted.length) {
-    if (round(sorted[0].min, 2) !== 1.01) errors.push('RISK_TABLE_MUST_START_AT_1_01');
-    if (round(sorted[sorted.length - 1].max, 2) !== MAX_MULT) errors.push('RISK_TABLE_MUST_END_AT_10000');
+    if (round(sorted[0].min, 2) !== 1.05) errors.push('RISK_TABLE_MUST_START_AT_1_05');
+    if (round(sorted[sorted.length - 1].max, 2) !== MAX_MULT) errors.push('RISK_TABLE_MUST_END_AT_100');
   }
   for (let i = 1; i < sorted.length; i += 1) {
     if (sorted[i].min <= sorted[i - 1].max) errors.push(`ROW_${i + 1}_OVERLAPS_PREVIOUS`);
@@ -141,6 +142,11 @@ async function loadRiskTable() {
         const snap = await db.collection(RISK_DOC_COLLECTION).doc(RISK_DOC_ID).get();
         const parsed = validateRiskTable((snap.exists ? snap.data() : null)?.riskTable || [], { useDefaultOnInvalid: false });
         if (parsed.ok) state.risk = parsed.rows;
+        const config=snap.exists?snap.data():{};
+        state.mode=config.mode==='planned'?'planned':'weighted';
+        state.plan=Array.isArray(config.planHundredths)?config.planHundredths:[];
+        state.planCursor=Number.isSafeInteger(config.planCursor)?config.planCursor:0;
+        state.settingsVersion=Number.isSafeInteger(config.settingsVersion)?config.settingsVersion:0;
         state.riskRetryAt = 0;
       }
     } catch (error) {
@@ -371,6 +377,10 @@ function snapshot({ viewerUid = '' } = {}) {
     maxMultiplier: MAX_MULT,
     betLimits: { min: MIN_BET, max: MAX_BET },
     autoCashoutLimits: { min: MIN_AUTO_CASHOUT, max: MAX_AUTO_CASHOUT },
+    resultMode: state.lockedRound?.mode || state.mode,
+    resultDisclosure: (state.lockedRound?.mode || state.mode)==='planned'
+      ? 'Bu oyunda sonuçlar önceden tanımlanmış tur planına göre belirlenir.'
+      : 'Tur sonuçları önceden tanımlı ağırlıklarla rastgele belirlenir.',
     history,
     activePlayers,
     activeBets: activePlayers
@@ -399,19 +409,61 @@ function clearTimer() {
   state.timer = null;
 }
 
-function startCountdown() {
+async function startCountdown() {
+  // A round is not open for wagers until its crash value is durably locked.
   clearAllAutoTimers();
-  state.phase = 'COUNTDOWN';
-  state.roundId = `cr_${now()}_${crypto.randomBytes(4).toString('hex')}`;
-  state.crashPoint = pickCrashPoint();
-  state.countdownUntil = now() + WAIT_MS;
-  state.startedAt = 0;
-  state.multiplier = 1;
-  state.bets.clear();
-  emitState({ force: true });
   clearTimer();
-  state.timer = setTimeout(startFlying, WAIT_MS);
-  state.timer.unref?.();
+  state.phase='PREPARING';
+  state.roundId='';
+  const proposedId=`cr_${now()}_${crypto.randomBytes(6).toString('hex')}`;
+  const {db}=initFirebaseAdmin();
+  if (!db) {state.phase='UNAVAILABLE';emitState({force:true});return;}
+  try {
+    let locked;
+    await db.runTransaction(async tx=>{
+      const ref=db.collection(RISK_DOC_COLLECTION).doc(RISK_DOC_ID);
+      const configSnap=await tx.get(ref);
+      const config=configSnap.exists?configSnap.data():{};
+      const mode=config.mode==='planned'?'planned':'weighted';
+      const settingsVersion=Number.isSafeInteger(config.settingsVersion)?config.settingsVersion:0;
+      const parsed=validateRiskTable(config.riskTable || DEFAULT_RISK);
+      if (mode==='weighted'&&!parsed.ok) throw makeHttpError('CRASH_RISK_POLICY_INVALID',503);
+      let point, cursor=null;
+      if (mode==='planned') {
+        const plan=validateCrashPlan(config.planHundredths?.map(v=>v/100) || []);
+        cursor=Number(config.planCursor || 0);
+        if (!Number.isSafeInteger(cursor)||cursor<0||cursor>=plan.length) throw makeHttpError('CRASH_PLAN_EXHAUSTED',409);
+        point=plan[cursor]/100;
+        tx.update(ref,{planCursor:cursor+1,updatedAt:now()});
+      } else {
+        const total=parsed.rows.reduce((acc,row)=>acc+row.weight,0);
+        let roll=secureRandomFloat()*total;
+        const row=parsed.rows.find(entry=>(roll-=entry.weight)<=0) || parsed.rows.at(-1);
+        point=round(row.min+secureRandomFloat()*(row.max-row.min),2);
+      }
+      const at=now();
+      tx.create(db.collection('crashRounds').doc(proposedId),{roundId:proposedId,mode,settingsVersion,crashHundredths:Math.round(point*100),planIndex:cursor,status:'COUNTDOWN',lockedAt:at});
+      locked={roundId:proposedId,mode,settingsVersion,crashPoint:point,planIndex:cursor};
+    });
+    state.lockedRound=locked;
+    state.mode=locked.mode;
+    state.roundId=locked.roundId;
+    state.crashPoint=locked.crashPoint;
+    state.phase='COUNTDOWN';
+    state.countdownUntil=now()+WAIT_MS;
+    state.startedAt=0;
+    state.multiplier=1;
+    state.bets.clear();
+    emitState({force:true});
+    state.timer=setTimeout(startFlying,WAIT_MS);
+    state.timer.unref?.();
+  } catch(error) {
+    state.phase=error.message==='CRASH_PLAN_EXHAUSTED'?'PAUSED':'UNAVAILABLE';
+    state.roundId='';
+    state.lockedRound=null;
+    emitState({force:true});
+    console.error('[crash:round-prepare]',JSON.stringify({code:String(error.message || 'UNKNOWN').slice(0,100)}));
+  }
 }
 
 function startFlying() {
@@ -446,7 +498,7 @@ async function endRound() {
   runtimeStore.crashRounds.set(item.roundId, item, 3600000);
   emitState({ force: true });
   clearTimer();
-  state.timer = setTimeout(startCountdown, CRASHED_HOLD_MS);
+  state.timer = setTimeout(()=>startCountdown().catch(err=>console.error('[crash:round-error]',err.message)), CRASHED_HOLD_MS);
   state.timer.unref?.();
 }
 
@@ -511,7 +563,7 @@ function tick() {
 async function ensureRoundStarted() {
   if (state.roundId) return;
   if (state.roundStartPromise) return state.roundStartPromise;
-  state.roundStartPromise = (async () => { await loadRiskTable(); if (!state.roundId) startCountdown(); })().finally(() => { state.roundStartPromise = null; });
+  state.roundStartPromise = (async () => { await loadRiskTable(); if (!state.roundId) await startCountdown(); })().finally(() => { state.roundStartPromise = null; });
   return state.roundStartPromise;
 }
 
@@ -590,11 +642,45 @@ router.post('/admin/risk-table', requireAuth, requireAdmin, async (req, res, nex
   try {
     const parsed = validateRiskTable(req.body.rows || req.body.riskTable || [], { useDefaultOnInvalid: false });
     if (!parsed.ok) return res.status(400).json({ ok: false, error: 'INVALID_RISK_TABLE', details: parsed.errors });
+    const persisted = await persistRiskTable(parsed.rows, req.user?.uid);
+    if (!persisted) return res.status(503).json({ok:false,error:'DATA_NOT_READY'});
     state.risk = parsed.rows;
-    const persisted = await persistRiskTable(state.risk, req.user?.uid);
     console.info('[admin:crash-risk-table]', JSON.stringify({ uid: req.user.uid, ranges: state.risk.length, persisted }));
     res.json({ ok: true, persisted, riskTable: state.risk });
   } catch (error) { console.error('[crash:risk-table:persist:error]', JSON.stringify({ message: error.message })); next(error); }
+});
+
+// The planned multiplier list is administrator-only. Past results remain auditable.
+router.get('/admin/round-policy',requireAuth,requireAdmin,async (_req,res,next)=>{
+  try {
+    const {db}=initFirebaseAdmin();
+    if(!db)return res.status(503).json({ok:false,error:'DATA_NOT_READY'});
+    const snap=await db.collection(RISK_DOC_COLLECTION).doc(RISK_DOC_ID).get();
+    const cfg=snap.exists?snap.data():{};
+    res.json({ok:true,mode:cfg.mode==='planned'?'planned':'weighted',
+      plan:(cfg.planHundredths || []).map(v=>v/100),planCursor:cfg.planCursor||0,
+      settingsVersion:cfg.settingsVersion||0,riskTable:cfg.riskTable||DEFAULT_RISK});
+  }catch(error){next(error);}
+});
+router.post('/admin/round-policy',requireAuth,requireAdmin,async(req,res,next)=>{
+  try {
+    const mode=req.body?.mode;
+    if(!['planned','weighted'].includes(mode)) return res.status(400).json({ok:false,error:'INVALID_CRASH_MODE'});
+    const plan=mode==='planned'?validateCrashPlan(req.body.plan):[];
+    const {db}=initFirebaseAdmin();
+    if(!db)return res.status(503).json({ok:false,error:'DATA_NOT_READY'});
+    const configRef=db.collection(RISK_DOC_COLLECTION).doc(RISK_DOC_ID);
+    const auditRef=db.collection('adminAudit').doc(`crash_policy_${crypto.randomUUID()}`);
+    await db.runTransaction(async tx=>{
+      const prior=await tx.get(configRef);
+      const version=(Number(prior.data()?.settingsVersion || 0)+1);
+      const when=now();
+      tx.set(configRef,{mode,planHundredths:plan,planCursor:0,settingsVersion:version,updatedAt:when,updatedBy:req.user.uid},{merge:true});
+      tx.create(auditRef,{actor:req.user.uid,action:'CRASH_POLICY_UPDATE',beforeVersion:version-1,afterVersion:version,mode,planCount:plan.length,at:when});
+    });
+    // The current locked round is unchanged; new policy applies to subsequent rounds.
+    res.json({ok:true,mode,settingsAppliedTo:'NEXT_ROUND',planCount:plan.length});
+  }catch(error){if(error.statusCode)return res.status(error.statusCode).json({ok:false,error:error.message});next(error);}
 });
 
 async function authenticateCrashSocket(socket) {

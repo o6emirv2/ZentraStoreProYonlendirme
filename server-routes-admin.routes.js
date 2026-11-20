@@ -211,7 +211,6 @@ router.get('/admin/games', (_req, res) => {
     { slug:'crash', title:'Crash', status:'online', backend:'/server-games-crash-index.js', data:'in-memory-rounds-risk-table' },
     { slug:'chess', title:'Satranç', status:'online', backend:'/server-games-chess-index.js', data:'room-state-move-validation' },
     { slug:'pisti', title:'Pişti', status:'online', backend:'/server-games-pisti-index.js', data:'room-card-validation' },
-    { slug:'pattern-master', title:'Pattern Master', status:'online', backend:'/server-games-pattern-master-index.js', data:'score-validation' },
     { slug:'space-pro', title:'Space Pro', status:'online', backend:'/server-games-space-pro-index.js', data:'score-validation' },
     { slug:'snake-pro', title:'Snake Pro', status:'online', backend:'/server-games-snake-pro-index.js', data:'score-validation' }
   ] });

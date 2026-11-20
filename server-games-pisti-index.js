@@ -1,89 +1,299 @@
+'use strict';
 const express = require('express');
-const crypto = require('crypto');
-const { requireAuth } = require('./server-core-security.js');
-const { debitBalance, creditBalance } = require('./server-core-economyService.js');
+const crypto = require('node:crypto');
+const {wager} = require('./server-core-gamePolicy.js');
+const {requireAuth} = require('./server-core-security.js');
+const {initFirebaseAdmin} = require('./server-config-firebaseAdmin.js');
+const {applyWagerToProfile} = require('./server-core-progressionService.js');
 const router = express.Router();
-const rooms = new Map();
-// Prevent simultaneous requests from mutating the same in-memory game room.
-const roomLocks = new Set();
-async function inRoomLock(roomId, res, action) {
-  if (roomLocks.has(roomId)) return res.status(409).json({ok:false,error:'ROOM_BUSY'});
-  roomLocks.add(roomId);
-  try { return await action(); } finally { roomLocks.delete(roomId); }
+const now = () => Date.now();
+const fail = (code,statusCode=400) => Object.assign(new Error(code),{statusCode});
+const collection = 'pistiRooms';
+let io = null;
+function uid(req){const id=String(req.user?.uid||'');if(!/^[\w-]{6,128}$/.test(id))throw fail('AUTH_REQUIRED',401);return id;}
+function name(req){return String(req.user?.name||req.user?.email?.split('@')[0]||`Oyuncu-${uid(req).slice(0,6)}`).slice(0,40);}
+function getDb(){const {db}=initFirebaseAdmin();if(!db)throw fail('DATA_NOT_READY',503);return db;}
+function requestId(req){const raw=String(req.body?.requestId||'').trim();if(!/^[\w-]{8,100}$/.test(raw))throw fail('REQUEST_ID_REQUIRED');return raw;}
+function roomId(req){const raw=String(req.params.roomId||req.body?.roomId||'');if(!/^pi_[0-9a-f-]{36}$/.test(raw))throw fail('INVALID_ROOM_ID');return raw;}
+function roomRef(db,id){return db.collection(collection).doc(id);}
+function pickDeck(){
+ const deck=[];for(const suit of ['S','H','D','C'])for(const rank of ['A','2','3','4','5','6','7','8','9','10','J','Q','K'])deck.push(rank+suit);
+ for(let i=deck.length-1;i>0;i--){const j=crypto.randomInt(i+1);[deck[i],deck[j]]=[deck[j],deck[i]];}
+ return deck;
 }
-const now=()=>Date.now();
-function uid(req){return String(req.user?.uid||'');} function uname(req){return String(req.user?.email||req.user?.name||`Oyuncu-${uid(req).slice(0,5)}`);} function rid(){return `pi_${now()}_${crypto.randomBytes(3).toString('hex')}`;}
-function clampBet(v){ return Math.max(0, Math.min(10000, Math.trunc(Number(v)||0))); }
-function deck(){ const suits=['S','H','D','C'], ranks=['A','2','3','4','5','6','7','8','9','10','J','Q','K']; const d=[]; for(const s of suits) for(const r of ranks) d.push(`${r}${s}`); for(let i=d.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [d[i],d[j]]=[d[j],d[i]];} return d; }
-function sanitizeRoom(r, forUid=''){ return { id:r.id, roomName:r.roomName, mode:r.mode, status:r.status, bet:r.bet, pot:r.pot, maxPlayers:r.maxPlayers, currentPlayers:r.players.length, isPrivate:!!r.password, hostName:r.players[0]?.name||'Bilinmeyen', turn:r.turn, tableCards:r.tableCards, deckCount:r.deck.length, scores:r.scores, stateVersion:r.stateVersion, lastEvent:r.lastEvent||null, players:r.players.map((p,i)=>({ uid:p.uid, name:p.name, seat:i, score:r.scores[i]||0, hand:p.uid===forUid?p.hand:p.hand.map(()=>'?'), handCount:p.hand.length, connected:true })) }; }
-async function charge(req,r){ if(!r.bet) return {ok:true}; return debitBalance({uid:uid(req),amount:r.bet,reason:'pisti-bet',idempotencyKey:`pisti:bet:${r.id}:${uid(req)}`}); }
-function create(req, opts={}){ const maxPlayers=String(opts.mode||'2').includes('4')?4:2; const b=clampBet(opts.bet); const r={id:rid(),roomName:String(opts.roomName||`${uname(req)} Masası`).slice(0,60),password:String(opts.password||''),mode:maxPlayers===4?'4p':'2p',status:'waiting',bet:b,pot:0,maxPlayers,players:[{uid:uid(req),name:uname(req),hand:[]}],deck:deck(),tableCards:[],pileOwner:-1,turn:0,scores:Array(maxPlayers).fill(0),stateVersion:1,createdAt:now(),updatedAt:now()}; rooms.set(r.id,r); return r; }
-function dealIfReady(r){ if(r.status==='playing') return; if(r.players.length<r.maxPlayers) return; r.status='playing'; for(const p of r.players) p.hand=r.deck.splice(0,4); r.tableCards=r.deck.splice(0,4); r.turn=0; r.stateVersion++; }
-async function payout(r){ if(!r.bet) return null; const max=Math.max(...r.scores); const winners=r.scores.map((s,i)=>s===max?i:-1).filter(i=>i>=0); if(winners.length===0) return null; const share=Math.floor(r.pot/winners.length); const out=[]; for(const i of winners){ const p=r.players[i]; if(p) out.push(await creditBalance({uid:p.uid,amount:share,reason:'pisti-win',idempotencyKey:`pisti:win:${r.id}:${p.uid}`})); } return out; }
-router.get('/lobby', (_req,res)=>res.json({ok:true,rooms:[...rooms.values()].filter(r=>r.status!=='finished').map(r=>sanitizeRoom(r))}));
-router.post('/play-open', requireAuth, async (req,res)=>{
-  const bet=clampBet(req.body.bet);
-  let r=[...rooms.values()].find(x=>!x.password&&x.status==='waiting'&&x.bet===bet&&x.players.length<x.maxPlayers);
-  const created=!r;
-  if(created)r=create(req,req.body);
-  return inRoomLock(r.id,res,async()=>{
-  const isHost=created && r.players[0]?.uid===uid(req);
-  if(isHost || !r.players.some(p=>p.uid===uid(req))){
-    const c=await charge(req,r);
-    if(!c.ok){if(created)rooms.delete(r.id);return res.status(409).json(c);}
-    if(!isHost)r.players.push({uid:uid(req),name:uname(req),hand:[]});
-    r.pot+=r.bet;
+function createRoom(req,id){
+ const maxPlayers=String(req.body.mode||'2').includes('4')?4:2;
+ const bet=wager('pisti',req.body.bet);
+ const pass=String(req.body.password||'');
+ if(pass.length>0&&pass.length<5)throw fail('ROOM_PASSWORD_TOO_SHORT');
+ if(pass.length>100)throw fail('ROOM_PASSWORD_TOO_LONG');
+ const salt=pass?crypto.randomBytes(16).toString('hex'):'';
+ const hash=pass?crypto.scryptSync(pass,salt,32).toString('hex'):'';
+ return {id,roomName:String(req.body.roomName||`${name(req)} Masası`).trim().slice(0,60)||'Pişti Masası',
+ mode:maxPlayers===4?'4p':'2p',status:'waiting',bet,maxPlayers,pot:bet,
+ passwordSalt:salt,passwordHash:hash,
+ players:[{uid:uid(req),name:name(req),hand:[]}],deck:pickDeck(),tableCards:[],pileOwner:-1,
+ scores:Array(maxPlayers).fill(0),capturedCounts:Array(maxPlayers).fill(0),turn:0,
+ stateVersion:1,createdAt:now(),updatedAt:now(),lastEvent:null};
+}
+function publicRoom(room,viewer=''){
+ return {id:room.id,roomName:room.roomName,mode:room.mode,status:room.status,bet:room.bet,pot:room.pot,
+  maxPlayers:room.maxPlayers,currentPlayers:room.players.length,isPrivate:!!room.passwordHash,
+  hostName:room.players[0]?.name||'Bilinmeyen',turn:room.turn,tableCards:room.tableCards,
+  deckCount:room.deck.length,scores:room.scores,stateVersion:room.stateVersion,lastEvent:room.lastEvent||null,
+  players:room.players.map((p,i)=>({uid:p.uid,name:p.name,seat:i,score:room.scores[i]||0,
+   hand:p.uid===viewer?p.hand:p.hand.map(()=>'?'),handCount:p.hand.length,connected:true}))};
+}
+function validRoomPassword(room,submitted){
+ if(!room.passwordHash)return true;
+ const calculated=crypto.scryptSync(String(submitted||''),room.passwordSalt,32);
+ const stored=Buffer.from(room.passwordHash,'hex');
+ return calculated.length===stored.length&&crypto.timingSafeEqual(calculated,stored);
+}
+function applyDebit(tx,db,userRef,userDoc,playerUid,bet,id){
+ if(!userDoc.exists)throw fail('PROFILE_NOT_READY',409);
+ const profile=userDoc.data()||{},before=Number(profile.balance);
+ if(!Number.isSafeInteger(before)||before<0)throw fail('INVALID_BALANCE',409);
+ if(before<bet)throw fail('INSUFFICIENT_BALANCE',409);
+ const after=before-bet,at=now(),reason='pisti-bet';
+ const idem=`pisti:bet:${id}:${playerUid}`;
+ const idemId=crypto.createHash('sha256').update(`${playerUid}:${idem}`).digest('hex');
+ const signature=crypto.createHash('sha256').update(JSON.stringify([playerUid,-bet,reason])).digest('hex');
+ // Reserve the stake immediately; apply level progression only when the game is completed.
+ tx.update(userRef,{balance:after,updatedAt:at});
+ tx.create(db.collection('idempotency').doc(idemId),{key:idem,id:idemId,signature,uid:playerUid,createdAt:at,result:{ok:true,uid:playerUid,amount:-bet,balance:after,reason}});
+ tx.create(db.collection('audit').doc(`pisti_bet_${id}_${playerUid}`),{uid:playerUid,amount:-bet,reason,balanceAfter:after,at,roomId:id,idempotencyId:idemId});
+ return after;
+}
+function awards(room){
+ if(!room.players.length)return [];
+ if(room.maxPlayers===4&&room.players.length===4){
+  const side1=room.scores[0]+room.scores[2],side2=room.scores[1]+room.scores[3];
+  return side1===side2?[...room.players]:side1>side2?[room.players[0],room.players[2]]:[room.players[1],room.players[3]];
+ }
+ const largest=Math.max(...room.scores.slice(0,room.players.length));
+ return room.players.filter((_,i)=>room.scores[i]===largest);
+}
+function splitPot(room,winners){
+ const count=winners.length;if(!count)throw fail('SETTLEMENT_EMPTY',409);
+ const share=Math.floor(room.pot/count),rem=room.pot%count;
+ return winners.map((p,i)=>({uid:p.uid,amount:share+(i<rem?1:0)}));
+}
+async function settleInTransaction(tx,db,room,payouts,reason){
+ // A completed game grants progression to *all* participants; winnings are not additional wager spend.
+ const prizes=new Map(payouts.map(x=>[x.uid,x.amount]));
+ const refs=room.players.map(p=>db.collection('users').doc(p.uid));
+ const accounts=await Promise.all(refs.map(ref=>tx.get(ref)));
+ const at=now();
+ for(let i=0;i<room.players.length;i++){
+  const player=room.players[i],doc=accounts[i];if(!doc.exists)throw fail('PROFILE_NOT_READY',409);
+  const old=Number(doc.data().balance),credit=prizes.get(player.uid)||0;
+  if(!Number.isSafeInteger(old)||old<0||!Number.isSafeInteger(old+credit))throw fail('INVALID_BALANCE',409);
+  tx.update(refs[i],{balance:old+credit,updatedAt:at,...applyWagerToProfile(doc.data(),room.bet)});
+  if(!credit)continue;
+  tx.create(db.collection('audit').doc(`pisti_settle_${room.id}_${player.uid}`),{uid:player.uid,amount:credit,reason,roomId:room.id,balanceAfter:old+credit,at});
+  const idem=`pisti:settle:${room.id}:${player.uid}`;
+  const idemId=crypto.createHash('sha256').update(`${player.uid}:${idem}`).digest('hex');
+  tx.create(db.collection('idempotency').doc(idemId),{key:idem,uid:player.uid,createdAt:at,result:{ok:true,amount:credit,balance:old+credit,reason}});
+ }
+ room.status='finished';room.finishedAt=at;room.updatedAt=at;
+}
+function dealIfReady(room){
+ if(room.status!=='waiting'||room.players.length<room.maxPlayers)return;
+ room.status='playing';for(const player of room.players)player.hand=room.deck.splice(0,4);
+ room.tableCards=room.deck.splice(0,4);room.turn=0;room.stateVersion++;
+}
+async function createTransaction(req){
+ const db=getDb(),playerUid=uid(req),key=requestId(req),id='pi_'+crypto.randomUUID();
+ const idemRef=db.collection('pistiCreateRequests').doc(crypto.createHash('sha256').update(`${playerUid}:${key}`).digest('hex'));
+ const result=await db.runTransaction(async tx=>{
+  const prior=await tx.get(idemRef);
+  const requestSignature=crypto.createHash('sha256').update(JSON.stringify([req.body.mode,req.body.bet,req.body.roomName||'',req.body.password||''])).digest('hex');
+  if(prior.exists){
+    if(prior.data().requestSignature!==requestSignature)throw fail('REQUEST_ID_CONFLICT',409);
+    const roomDoc=await tx.get(roomRef(db,prior.data().roomId));
+    if(!roomDoc.exists)throw fail('ROOM_NOT_FOUND',404);
+    return roomDoc.data();
   }
-  dealIfReady(r);
-  return res.json({ok:true,room:sanitizeRoom(r,uid(req))});
-  });
+  const room=createRoom(req,id);
+  const userRef=db.collection('users').doc(playerUid),userDoc=await tx.get(userRef);
+  applyDebit(tx,db,userRef,userDoc,playerUid,room.bet,id);
+  tx.create(roomRef(db,id),room);
+  tx.create(idemRef,{roomId:id,uid:playerUid,requestId:key,requestSignature,at:now()});
+  return room;
+ });
+ return result;
+}
+async function joinTransaction(req,id){
+ const db=getDb(),playerUid=uid(req),ref=roomRef(db,id);
+ return db.runTransaction(async tx=>{
+  const snap=await tx.get(ref);if(!snap.exists)throw fail('ROOM_NOT_FOUND',404);
+  const room=snap.data();
+  if(room.players.some(player=>player.uid===playerUid))return room;
+  if(room.status!=='waiting')throw fail('ROOM_NOT_WAITING',409);
+  if(!validRoomPassword(room,req.body.password))throw fail('ROOM_PASSWORD_REQUIRED',403);
+  if(room.players.length>=room.maxPlayers)throw fail('ROOM_FULL',409);
+  const userRef=db.collection('users').doc(playerUid),userDoc=await tx.get(userRef);
+  applyDebit(tx,db,userRef,userDoc,playerUid,room.bet,id);
+  room.players.push({uid:playerUid,name:name(req),hand:[]});room.pot+=room.bet;
+  dealIfReady(room);room.updatedAt=now();room.stateVersion++;
+  tx.update(ref,room);
+  return room;
+ });
+}
+function cardPoints(cards){return cards.reduce((sum,card)=>sum+(card[0]==='A'?1:0)+(card[0]==='J'?1:0)+(card==='2C'?2:0)+(card==='10D'?3:0),0);}
+function scoreCapture(room,index,cards,isPisti,isJack){
+ const extra=isPisti?(isJack?20:10):0;
+ room.scores[index]+=cardPoints(cards)+extra;
+ room.capturedCounts[index]+=cards.length;
+ room.lastEvent={type:isPisti?'pisti':'take',seat:index,points:cardPoints(cards)+extra,at:now()};
+ room.pileOwner=index;
+}
+function majorityBonus(room){
+ if(room.maxPlayers===4&&room.players.length===4){
+  const a=room.capturedCounts[0]+room.capturedCounts[2],b=room.capturedCounts[1]+room.capturedCounts[3];
+  if(a>b)room.scores[0]+=3;else if(b>a)room.scores[1]+=3;
+ }else{
+  const n=room.capturedCounts.slice(0,room.players.length),max=Math.max(...n);
+  if(n.filter(v=>v===max).length===1)room.scores[n.indexOf(max)]+=3;
+ }
+}
+function applyMove(room,playerUid,token,expectedStateVersion){
+ if(room.status!=='playing')throw fail('ROOM_NOT_PLAYING',409);
+ if(!Number.isSafeInteger(expectedStateVersion)||expectedStateVersion!==room.stateVersion)throw fail('STATE_VERSION_MISMATCH',409);
+ const turn=room.turn,player=room.players[turn];
+ if(!player||player.uid!==playerUid)throw fail('NOT_YOUR_TURN',409);
+ const index=player.hand.indexOf(token);if(index<0)throw fail('CARD_NOT_IN_HAND',400);
+ const before=room.tableCards.slice(),oldTop=before.at(-1)||'';
+ player.hand.splice(index,1);room.tableCards.push(token);
+ const rank=token.replace(/[SHDC]$/,'');
+ const matched=oldTop&&((rank===oldTop.replace(/[SHDC]$/,''))||rank==='J');
+ if(matched){
+  const captured=room.tableCards.slice(),isPisti=before.length===1 && (rank===oldTop.replace(/[SHDC]$/,''));
+  scoreCapture(room,turn,captured,isPisti,rank==='J');room.tableCards=[];
+ }
+ if(room.players.every(p=>p.hand.length===0)){
+  if(room.deck.length>=room.players.length*4)for(const p of room.players)p.hand=room.deck.splice(0,4);
+  else{
+   if(room.pileOwner>=0&&room.tableCards.length)scoreCapture(room,room.pileOwner,room.tableCards,false,false);
+   room.tableCards=[];majorityBonus(room);room.status='settling';
+  }
+ }
+ room.turn=(turn+1)%room.players.length;room.stateVersion++;room.updatedAt=now();
+ return room;
+}
+async function doPlay(req){
+ const db=getDb(),id=roomId(req),playerUid=uid(req),token=String(req.body.cardToken||'');
+ return db.runTransaction(async tx=>{
+  const ref=roomRef(db,id),snap=await tx.get(ref);if(!snap.exists)throw fail('ROOM_NOT_FOUND',404);
+  const room=applyMove(snap.data(),playerUid,token,Number(req.body.expectedStateVersion));
+  if(room.status==='settling')await settleInTransaction(tx,db,room,splitPot(room,awards(room)),'pisti-win');
+  tx.update(ref,room);
+  return room;
+ });
+}
+async function doLeave(req){
+ const db=getDb(),id=roomId(req),user=uid(req);
+ return db.runTransaction(async tx=>{
+  const ref=roomRef(db,id),doc=await tx.get(ref);if(!doc.exists)return null;
+  const room=doc.data();
+  const index=room.players.findIndex(p=>p.uid===user);if(index<0)throw fail('NOT_IN_ROOM',403);
+  if(room.status==='finished')return room;
+  if(room.status==='waiting'){
+   const self=db.collection('users').doc(user),snap=await tx.get(self);
+   if(!snap.exists)throw fail('PROFILE_NOT_READY',409);
+   const balance=Number(snap.data().balance);
+   if(!Number.isSafeInteger(balance)||balance<0||!Number.isSafeInteger(balance+room.bet))throw fail('INVALID_BALANCE',409);
+   const at=now(),reason='pisti-cancel-refund';
+   tx.update(self,{balance:balance+room.bet,updatedAt:at});
+   tx.create(db.collection('audit').doc(`pisti_refund_${room.id}_${user}`),{uid:user,amount:room.bet,reason,roomId:room.id,balanceAfter:balance+room.bet,at});
+   const idem=`pisti:cancel:${room.id}:${user}`,idemId=crypto.createHash('sha256').update(`${user}:${idem}`).digest('hex');
+   tx.create(db.collection('idempotency').doc(idemId),{key:idem,uid:user,createdAt:at,result:{ok:true,amount:room.bet,balance:balance+room.bet,reason}});
+   room.players.splice(index,1);room.pot-=room.bet;
+   if(!room.players.length)room.status='finished';
+  }else if(room.status==='playing'){
+   const others=room.players.filter(p=>p.uid!==user);
+   if(!others.length)throw fail('NO_OPPONENT',409);
+   await settleInTransaction(tx,db,room,splitPot(room,others),'pisti-opponent-left');
+  }
+  room.updatedAt=now();room.stateVersion++;tx.update(ref,room);return room;
+ });
+}
+async function emitRoom(room){if(!room||!io)return;io.to(`pisti:${room.id}`).emit('pisti:update',{id:room.id,roomId:room.id,roomVersion:room.stateVersion,status:room.status});}
+function respond(res,next,action,viewer,options={}){return Promise.resolve().then(action).then(room=>{
+ if(room)emitRoom(room);
+ res.status(options.status||200).json({ok:true,...(room?{room:publicRoom(room,viewer)}:{})});
+}).catch(next);}
+router.get('/lobby',requireAuth,async(req,res,next)=>{
+ try{uid(req);const db=getDb(),snap=await db.collection(collection).where('status','in',['waiting','playing']).limit(80).get();
+  const rooms=snap.docs.map(doc=>publicRoom(doc.data())).sort((a,b)=>a.status===b.status?0:a.status==='waiting'?-1:1);
+  res.json({ok:true,rooms});
+ }catch(error){next(error);}
 });
-router.post('/create-private', requireAuth, async (req,res)=>{ const r=create(req,req.body); const c=await charge(req,r); if(!c.ok){rooms.delete(r.id);return res.status(409).json(c);} r.pot+=r.bet; res.json({ok:true,room:sanitizeRoom(r,uid(req)),balance:c.balance}); });
-router.post('/join', requireAuth, async (req,res)=>{ const r=rooms.get(String(req.body.roomId)); if(!r) return res.status(404).json({ok:false,error:'ROOM_NOT_FOUND'}); return inRoomLock(r.id,res,async()=>{ if(r.status!=='waiting')return res.status(409).json({ok:false,error:'ROOM_NOT_WAITING'}); if(r.password&&String(req.body.password||'')!==r.password) return res.status(403).json({ok:false,error:'ROOM_PASSWORD_REQUIRED'}); if(!r.players.some(p=>p.uid===uid(req))){ if(r.players.length>=r.maxPlayers) return res.status(409).json({ok:false,error:'ROOM_FULL'}); const c=await charge(req,r); if(!c.ok) return res.status(409).json(c); r.players.push({uid:uid(req),name:uname(req),hand:[]}); r.pot+=r.bet; } dealIfReady(r); return res.json({ok:true,room:sanitizeRoom(r,uid(req))}); }); });
-router.get('/state/:roomId', requireAuth, (req,res)=>{ const r=rooms.get(String(req.params.roomId)); if(!r) return res.status(404).json({ok:false,error:'ROOM_NOT_FOUND'}); res.json({ok:true,room:sanitizeRoom(r,uid(req))}); });
-router.post('/ping', requireAuth, (req,res)=>{ const r=rooms.get(String(req.body.roomId)); if(!r) return res.status(404).json({ok:false,error:'ROOM_NOT_FOUND'}); r.updatedAt=now(); res.json({ok:true,room:sanitizeRoom(r,uid(req))}); });
-router.post('/play', requireAuth, async (req,res)=>{ const r=rooms.get(String(req.body.roomId)); if(!r) return res.status(404).json({ok:false,error:'ROOM_NOT_FOUND'}); return inRoomLock(r.id,res,async()=>{ if(r.status!=='playing') return res.status(409).json({ok:false,error:'ROOM_NOT_PLAYING'}); const idx=r.players.findIndex(p=>p.uid===uid(req)); if(idx!==r.turn) return res.status(409).json({ok:false,error:'NOT_YOUR_TURN'}); const cardToken=String(req.body.cardToken||''); const hand=r.players[idx].hand; const cardIndex=hand.indexOf(cardToken); if(cardIndex<0) return res.status(400).json({ok:false,error:'CARD_NOT_IN_HAND'}); hand.splice(cardIndex,1); r.tableCards.push(cardToken); const topBefore=r.tableCards.length>1?r.tableCards[r.tableCards.length-2]:''; const rank=cardToken.replace(/[SHDC]$/,''); const topRank=topBefore.replace(/[SHDC]$/,''); if(topBefore&&(rank===topRank||rank==='J')){ const gained=r.tableCards.length; r.scores[idx]+=gained; r.tableCards=[]; r.pileOwner=idx; r.lastEvent={type:gained===2?'pisti':'take',seat:idx,points:gained,at:now()}; }
- if(r.players.every(p=>p.hand.length===0)){ if(r.deck.length>=r.players.length*4){ for(const p of r.players) p.hand=r.deck.splice(0,4); } else { r.status='finished'; if(r.pileOwner>=0) r.scores[r.pileOwner]+=r.tableCards.length; r.tableCards=[]; await payout(r); } }
- r.turn=(r.turn+1)%r.players.length; r.stateVersion++; r.updatedAt=now(); return res.json({ok:true,room:sanitizeRoom(r,uid(req))}); }); });
-router.post('/leave',requireAuth,async(req,res)=>{
-  const r=rooms.get(String(req.body.roomId));
-  if(!r)return res.json({ok:true});
-  return inRoomLock(r.id,res,async()=>{
-  const idx=r.players.findIndex(p=>p.uid===uid(req));
-  if(idx<0)return res.status(403).json({ok:false,error:'NOT_IN_ROOM'});
-  if(r.status==='playing'&&r.bet){
-    const winners=r.players.filter(p=>p.uid!==uid(req));
-    const share=winners.length?Math.floor(r.pot/winners.length):0;
-    for(const player of winners)await creditBalance({uid:player.uid,amount:share,reason:'pisti-opponent-left',idempotencyKey:`pisti:left:${r.id}:${player.uid}`});
-    r.status='finished';
-  }else if(r.status==='waiting'){
-    if(r.bet){
-      const refund=await creditBalance({uid:uid(req),amount:r.bet,reason:'pisti-cancel-refund',idempotencyKey:`pisti:cancel:${r.id}:${uid(req)}`});
-      if(!refund.ok)return res.status(409).json(refund);
-      r.pot=Math.max(0,r.pot-r.bet);
-    }
-    r.players.splice(idx,1);
-    if(!r.players.length)rooms.delete(r.id);
-  }
-  return res.json({ok:true});
-  });
+router.post('/play-open',requireAuth,async(req,res,next)=>{
+ try{
+  const db=getDb(),bet=wager('pisti',req.body.bet),mode=String(req.body.mode||'2').includes('4')?'4p':'2p';
+  const snap=await db.collection(collection).where('status','==','waiting').limit(60).get();
+  const target=snap.docs.map(doc=>doc.data()).find(r=>!r.passwordHash&&r.bet===bet&&r.mode===mode&&r.players.length<r.maxPlayers&&!r.players.some(p=>p.uid===uid(req)));
+  const room=target?await joinTransaction(req,target.id):await createTransaction(req);
+  emitRoom(room);res.json({ok:true,room:publicRoom(room,uid(req))});
+ }catch(error){next(error);}
 });
-function installSocket(io){ io.on('connection',socket=>{ socket.on('pisti:join',roomId=>socket.join(`pisti:${roomId}`)); socket.on('pisti:leave',roomId=>socket.leave(`pisti:${roomId}`)); }); }
-setInterval(async()=>{
-  const cutoff=now()-2*60*60*1000;
-  for(const [roomId,room] of rooms){
-    if(room.updatedAt>=cutoff || roomLocks.has(roomId)) continue;
-    if(room.status==='finished'){rooms.delete(roomId);continue;}
-    await inRoomLock(roomId,{status:()=>({json:()=>null})},async()=>{
-      if(!room.bet){rooms.delete(roomId);return;}
-      // Refund all interrupted games rather than silently discarding paid MC.
-      for(const player of room.players){
-        const refund=await creditBalance({uid:player.uid,amount:room.bet,reason:'pisti-cancel-refund',idempotencyKey:`pisti:timeout:${roomId}:${player.uid}`})
-          .catch(error=>({ok:false,error:error.message}));
-        if(!refund.ok){ console.warn('[pisti:expired-room:refund-pending]',JSON.stringify({roomId,uid:player.uid,error:refund.error}));return; }
-      }
-      room.status='finished';rooms.delete(roomId);
-    });
-  }
-},60000).unref();
-module.exports={router, installSocket, _rooms:rooms};
+router.post('/create-private',requireAuth,(req,res,next)=>respond(res,next,()=>createTransaction(req),uid(req)));
+router.post('/join',requireAuth,(req,res,next)=>respond(res,next,()=>joinTransaction(req,roomId(req)),uid(req)));
+router.get('/state/:roomId',requireAuth,async(req,res,next)=>{
+ try{const db=getDb(),doc=await roomRef(db,roomId(req)).get();if(!doc.exists)throw fail('ROOM_NOT_FOUND',404);
+  const room=doc.data(),user=uid(req);if(!room.players.some(p=>p.uid===user))throw fail('NOT_IN_ROOM',403);
+  res.json({ok:true,room:publicRoom(room,user)});
+ }catch(error){next(error);}
+});
+router.post('/ping',requireAuth,async(req,res,next)=>{
+ try{const db=getDb(),ref=roomRef(db,roomId(req)),user=uid(req);
+  const room=await db.runTransaction(async tx=>{const doc=await tx.get(ref);if(!doc.exists)throw fail('ROOM_NOT_FOUND',404);
+    const room=doc.data();if(!room.players.some(p=>p.uid===user))throw fail('NOT_IN_ROOM',403);
+    if(room.status!=='finished'){room.updatedAt=now();tx.update(ref,{updatedAt:room.updatedAt});}
+    return room;
+  });res.json({ok:true,room:publicRoom(room,user)});
+ }catch(error){next(error);}
+});
+router.post('/play',requireAuth,(req,res,next)=>respond(res,next,()=>doPlay(req),uid(req)));
+router.post('/leave',requireAuth,(req,res,next)=>respond(res,next,()=>doLeave(req),uid(req)));
+async function expireRooms(){
+ const db=getDb(),cutoff=now()-2*60*60*1000;
+ const snap=await db.collection(collection).where('updatedAt','<',cutoff).limit(20).get();
+ for(const doc of snap.docs){
+  try{await db.runTransaction(async tx=>{
+   const ref=roomRef(db,doc.id),current=await tx.get(ref);if(!current.exists)return;
+   const room=current.data();if(!['waiting','playing'].includes(room.status)||room.updatedAt>=cutoff)return;
+   const refs=room.players.map(p=>db.collection('users').doc(p.uid));
+   const docs=await Promise.all(refs.map(ref=>tx.get(ref)));
+   for(let i=0;i<docs.length;i++){
+    if(!docs[i].exists)throw fail('PROFILE_NOT_READY',409);
+    const user=docs[i].data(),balance=Number(user.balance);
+    if(!Number.isSafeInteger(balance)||balance<0||!Number.isSafeInteger(balance+room.bet))throw fail('INVALID_BALANCE',409);
+    const player=room.players[i];tx.update(refs[i],{balance:balance+room.bet,updatedAt:now()});
+    tx.create(db.collection('audit').doc(`pisti_expire_${room.id}_${player.uid}`),{uid:player.uid,amount:room.bet,reason:'pisti-cancel-refund',roomId:room.id,at:now(),balanceAfter:balance+room.bet});
+   }
+   room.status='finished';room.lastEvent={type:'cancel',at:now()};room.updatedAt=now();room.stateVersion++;
+   tx.update(ref,room);
+  });}catch(error){console.error('[pisti:expiry:pending]',JSON.stringify({roomId:doc.id,code:String(error.message||error).slice(0,80)}));}
+ }
+}
+function installSocket(nextIo){
+ io=nextIo;
+ io.on('connection',socket=>{
+  socket.on('pisti:join',async id=>{
+   try{
+    if(!/^pi_[0-9a-f-]{36}$/.test(String(id||'')))return;
+    const {auth}=initFirebaseAdmin(),token=String(socket.handshake?.auth?.token||'');
+    if(!auth||!token)return;
+    const user=await auth.verifyIdToken(token);
+    const doc=await roomRef(getDb(),String(id)).get();
+    if(doc.exists&&doc.data().players.some(p=>p.uid===user.uid))socket.join(`pisti:${id}`);
+   }catch(error){socket.emit('pisti:error',{ok:false,error:'AUTH_REQUIRED'});}
+  });
+  socket.on('pisti:leave',id=>socket.leave(`pisti:${String(id||'').slice(0,120)}`));
+ });
+}
+setInterval(()=>expireRooms().catch(error=>console.error('[pisti:cleanup]',String(error.message||error).slice(0,100))),60000).unref();
+module.exports={router,installSocket,_internals:{pickDeck,cardPoints,applyMove,publicRoom,createRoom,awards,splitPot}};

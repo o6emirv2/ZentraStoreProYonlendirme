@@ -1,9 +1,11 @@
 const express = require('express');
 const crypto = require('crypto');
+const { wager } = require('./server-core-gamePolicy.js');
 const { requireAuth } = require('./server-core-security.js');
 const { debitBalance, creditBalance, readBalance } = require('./server-core-economyService.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
+const { loadPolicy } = require('./server-core-botPolicy.js');
 const { getProgression } = require('./server-core-progressionService.js');
 
 const router = express.Router();
@@ -96,13 +98,11 @@ function displayNameFromProfile(profile = {}, fallbackUid = '') {
   return `Oyuncu-${String(fallbackUid || '').slice(0, 5) || 'PM'}`;
 }
 function validateBetAmount(value, mode = '') {
-  const amount = Math.trunc(Number(value) || 0);
+  // Bot mode is a non-wager practice match. Every real-player room is staked.
   if (String(mode || '').toLowerCase() === 'bot') return 0;
-  if (amount <= 0) return 0;
-  if (amount < MIN_BET) throw createHttpError(400, 'BET_MIN_1000_MC');
-  if (amount > MAX_BET) throw createHttpError(400, 'BET_MAX_10000_MC');
-  return amount;
+  return wager('chess',value);
 }
+
 function normalizeMode(rawMode, betAmount) {
   const m = String(rawMode || '').toLowerCase();
   if (m === 'bot') return 'bot';
@@ -407,7 +407,7 @@ function publicRoom(r, viewerUid = '') {
     : null;
   return {
     id: r.id, roomId: r.id, status: r.status, mode: r.mode, bet: r.bet, pot: r.pot,
-    botRoom: r.mode === 'bot', joinDisabled: r.mode === 'bot' || r.status !== 'waiting', joinDisabledReason: r.mode === 'bot' ? 'BOT_ROOM_NOT_JOINABLE' : r.status !== 'waiting' ? 'ROOM_NOT_WAITING' : '', botThinkingUntil: r.botThinkingUntil || 0,
+    botDifficulty:r.mode==='bot'?r.botDifficulty||'normal':undefined, botRoom: r.mode === 'bot', joinDisabled: r.mode === 'bot' || r.status !== 'waiting', joinDisabledReason: r.mode === 'bot' ? 'BOT_ROOM_NOT_JOINABLE' : r.status !== 'waiting' ? 'ROOM_NOT_WAITING' : '', botThinkingUntil: r.botThinkingUntil || 0,
     host, guest,
     hostName: host.username, guestName: guest?.username || 'Bilinmeyen',
     hostUid: host.uid || '', guestUid: guest?.uid || '',
@@ -448,7 +448,7 @@ function syncClock(r) {
   return false;
 }
 async function chargePlayer(req, r) {
-  if (!r.bet) return { ok: true, balance: await readBalance(uidOf(req)).catch(() => 0) };
+  if (!r.bet) return { ok: true, balance: await readBalance(uidOf(req)) };
   return debitBalance({ uid: uidOf(req), amount: r.bet, reason: 'chess-bet', idempotencyKey: `chess:bet:${r.id}:${uidOf(req)}`, metadata: { roomId: r.id, mode: r.mode } });
 }
 // Stats tracking is independent from account XP, which must never grow from gameplay.
@@ -559,9 +559,9 @@ async function awardFreeWinReward({ uid, roomId }) {
 }
 
 async function settleRoom(r, reason = '') {
-  if (!r || r.settled) return r;
+  if (!r || r.settled || r.settling) return r;
   if (r.status !== 'finished') return r;
-  r.settled = true;
+  r.settling = true;
   r.finishedAt = r.finishedAt || now();
   r.settlement = r.settlement || {};
   r.freeRewards = r.freeRewards || {};
@@ -588,6 +588,14 @@ async function settleRoom(r, reason = '') {
   } else if (isFreeReal && !draw && r.winnerUid) {
     r.freeRewards[r.winnerUid] = await awardFreeWinReward({ uid: r.winnerUid, roomId: r.id }).catch((error) => ({ ok: false, rewarded: false, error: error.message, amount: 0 }));
   }
+  const credits=Object.values(r.settlement||{});
+  const pending=credits.some(credit=>!credit?.ok);
+  if(pending){
+    r.settling=false;
+    console.error('[chess:settle:pending]',JSON.stringify({roomId:r.id,reason:'PAYMENT_PENDING'}));
+    return r;
+  }
+  r.settled=true;r.settling=false;
   console.info('[chess:settle]', JSON.stringify({ roomId: r.id, reason, result: r.result, winnerColor: r.winnerColor || '', mode: r.mode, bet: r.bet, pot: r.pot }));
   emitRoom(r);
   emitLobby();
@@ -609,6 +617,10 @@ async function createRoomFor(req, opts = {}) {
   const owner = uidOf(req);
   const betAmount = validateBetAmount(opts.bet, opts.mode);
   const mode = normalizeMode(opts.mode, betAmount);
+  if (mode !== 'bot') {
+    const currentBalance=await readBalance(owner);
+    if (currentBalance < betAmount) throw createHttpError(409,'INSUFFICIENT_BALANCE');
+  }
   const existing = activeRoomFor(owner);
   if (existing) {
     if (existing.mode !== mode || Number(existing.bet || 0) !== Number(mode === 'bet' ? betAmount : 0)) throw createHttpError(409, 'ALREADY_IN_ACTIVE_CHESS_ROOM');
@@ -618,6 +630,10 @@ async function createRoomFor(req, opts = {}) {
   const player = await buildPlayer(req, 'w');
   const r = { id: `ch_${ts}_${crypto.randomBytes(12).toString('hex')}`, status: mode === 'bot' ? 'playing' : 'waiting', mode, bet: mode === 'bot' ? 0 : betAmount, pot: mode === 'bot' ? 0 : betAmount, fen: INITIAL_FEN, turn: 'w', moves: [], moveIds: {}, stateVersion: 1, drawOfferBy: '', check: '', createdAt: ts, updatedAt: ts, finishedAt: 0, players: [player], clock: { lastTurnAt: ts }, settlement: {}, freeRewards: {}, lifecycle: makeLifecycle(ts), lastGameActionAt: ts, lastMoveAt: 0, botThinkingUntil: 0 };
   if (mode === 'bot') {
+    const {db}=initFirebaseAdmin();
+    const settings=await loadPolicy(db);
+    r.botDifficulty=settings.config.chess;
+    r.botSettingsVersion=settings.version;
     r.players.push({ uid: `${BOT_PROFILE.uidPrefix}${r.id}`, name: BOT_PROFILE.name, username: BOT_PROFILE.username, avatar: BOT_PROFILE.avatar, color: 'b', timeLeftMs: FREE_TIME_MS, connected: true, joinedAt: ts, lastSeenAt: ts, isBot: true });
   }
   rooms.set(r.id, r);
@@ -763,7 +779,7 @@ async function joinRoomFor(req, r) {
   if (!r) throw createHttpError(404, 'ROOM_NOT_FOUND');
   if (r.status === 'finished') throw createHttpError(409, 'ROOM_FINISHED');
   if (r.mode === 'bot' && !r.players.some((p) => p.uid === playerUid)) throw createHttpError(409, 'BOT_ROOM_NOT_JOINABLE');
-  if (r.players.some((p) => p.uid === playerUid)) { const p = r.players.find((x) => x.uid === playerUid); p.connected = true; p.lastSeenAt = now(); p.disconnectedAt = 0; return { room: r, charged: { ok: true, balance: await readBalance(playerUid).catch(() => 0) } }; }
+  if (r.players.some((p) => p.uid === playerUid)) { const p = r.players.find((x) => x.uid === playerUid); p.connected = true; p.lastSeenAt = now(); p.disconnectedAt = 0; return { room: r, charged: { ok: true, balance: await readBalance(playerUid) } }; }
   if (r.players.length >= 2 || r.status !== 'waiting') throw createHttpError(409, 'ROOM_FULL');
   const active = activeRoomFor(playerUid);
   if (active && active.id !== r.id) throw createHttpError(409, 'ALREADY_IN_ACTIVE_CHESS_ROOM');
@@ -799,9 +815,49 @@ async function makeBotMoveIfNeeded(r) {
   const state = parseFen(r.fen);
   const moves = legalMoves(state, 'b');
   if (!moves.length) return;
-  const capture = moves.find((m) => m.captured);
-  const checkMoves = moves.filter((m) => isInCheck(applyMove(state, m), 'w'));
-  const chosen = checkMoves[0] || capture || moves[Math.floor(Math.random() * moves.length)];
+  const strength=r.botDifficulty||'normal';
+  const value={p:100,n:320,b:330,r:500,q:900,k:0};
+  const evaluate=(board)=>{
+    let total=0;
+    for(let row=0;row<8;row++)for(let col=0;col<8;col++){
+      const piece=board.board[row][col];if(!piece)continue;
+      const black=piece===piece.toLowerCase(),kind=piece.toLowerCase();
+      const center=(3.5-Math.abs(row-3.5))+(3.5-Math.abs(col-3.5));
+      const pawnAdv=kind==='p'?(black?row:7-row)*4:0;
+      const placement=['n','b'].includes(kind)?center*5:0;
+      total+=(black?1:-1)*((value[kind]||0)+placement+pawnAdv);
+    }
+    return total;
+  };
+  const tactical=(move)=>{
+    const cap=move.captured?(value[String(move.captured).toLowerCase()]||0):0;
+    return cap*10+(move.promotion?8000:0)+crypto.randomInt(100);
+  };
+  const search=(position,depth,beam=7)=>{
+    if(depth<=0)return evaluate(position);
+    const color=position.turn,available=legalMoves(position,color);
+    if(!available.length)return isInCheck(position,color)?(color==='b'?-100000:100000):0;
+    const ranked=available.map(m=>({move:m,score:tactical(m)})).sort((x,y)=>y.score-x.score).slice(0,beam);
+    let best=color==='b'?-Infinity:Infinity;
+    for(const entry of ranked){
+      const score=search(applyMove(position,entry.move),depth-1,beam);
+      best=color==='b'?Math.max(best,score):Math.min(best,score);
+    }
+    return best;
+  };
+  let chosen;
+  if(strength==='easy'){
+    chosen=moves[crypto.randomInt(moves.length)];
+  }else if(strength==='normal'){
+    chosen=moves.map(move=>({move,score:tactical(move)+evaluate(applyMove(state,move))*0.1}))
+      .sort((a,b)=>b.score-a.score)[0].move;
+  }else{
+    // Hard considers the opponent's reply; Expert also looks ahead to its own next move.
+    const depth=strength==='hard'?1:2;
+    const beam=strength==='hard'?8:9;
+    chosen=moves.map(move=>({move,score:search(applyMove(state,move),depth,beam)}))
+      .sort((a,b)=>b.score-a.score)[0].move;
+  }
   const next = applyMove(state, chosen);
   r.fen = boardToFen(next);
   r.turn = next.turn;
@@ -828,7 +884,7 @@ router.get('/profile', requireAuth, asyncRoute(async (req, res) => {
 }));
 router.post('/create', requireAuth, asyncRoute(async (req, res) => {
   const r = await createRoomFor(req, { bet: req.body?.bet || 0, mode: req.body?.mode || '' });
-  let charged = { ok: true, balance: await readBalance(uidOf(req)).catch(() => 0) };
+  let charged = { ok: true, balance: await readBalance(uidOf(req)) };
   if (r.players[0]?.uid === uidOf(req) && r.bet && !r.hostCharged) {
     charged = await chargePlayer(req, r);
     if (!charged.ok) { rooms.delete(r.id); return res.status(409).json(charged); }
@@ -848,7 +904,7 @@ router.post('/join', requireAuth, asyncRoute(async (req, res) => {
     r = findOpen({ uid: viewerUid, mode, bet: betAmount });
     if (!r) {
       r = await createRoomFor(req, { bet: betAmount, mode });
-      let charged = { ok: true, balance: await readBalance(viewerUid).catch(() => 0) };
+      let charged = { ok: true, balance: await readBalance(viewerUid) };
       if (r.bet && !r.hostCharged) { charged = await chargePlayer(req, r); if (!charged.ok) { rooms.delete(r.id); return res.status(409).json(charged); } r.hostCharged = true; }
       emitLobby();
       return res.json({ ok: true, room: publicRoom(r, viewerUid), balance: charged.balance, queued: true });
@@ -1006,7 +1062,8 @@ setInterval(async () => {
       rooms.delete(k);
       emitLobby();
     }
-    if (r.status === 'finished' && now() - (r.finishedAt || r.updatedAt || now()) > Number(process.env.CHESS_RESULT_RETENTION_MS || 120000)) {
+    if (r.status === 'finished' && !r.settled && !r.settling) await settleRoom(r,'settlement-retry').catch(error=>console.error('[chess:settlement:retry]',error.message));
+    if (r.status === 'finished' && r.settled && now() - (r.finishedAt || r.updatedAt || now()) > Number(process.env.CHESS_RESULT_RETENTION_MS || 120000)) {
       rooms.delete(k);
       emitLobby();
     }

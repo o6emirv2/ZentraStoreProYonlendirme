@@ -2,7 +2,7 @@ import { bootHomeApplication } from '/public-js-home-app.js';
 
 const PM_GAME_ROUTES = Object.freeze({
   crash: '/games-crash-index.html', chess: '/games-chess-index.html', satranc: '/games-chess-index.html', pisti: '/games-pisti-index.html',
-  pattern: '/games-pattern-master-index.html', patternmaster: '/games-pattern-master-index.html', space: '/games-space-pro-index.html', spacepro: '/games-space-pro-index.html',
+  space: '/games-space-pro-index.html', spacepro: '/games-space-pro-index.html',
   snake: '/games-snake-pro-index.html', snakepro: '/games-snake-pro-index.html'
 });
 

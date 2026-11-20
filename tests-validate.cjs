@@ -9,7 +9,7 @@ const exists = name => fs.existsSync(path.join(root, name));
 const sourceFiles = fs.readdirSync(root, {withFileTypes:true})
   .filter(entry => entry.isFile()).map(entry => entry.name);
 const adminFiles = fs.readdirSync(path.join(root,'admin'),{withFileTypes:true});
-for(const name of ['index.html','admin','server.js','games-chess-index.html','games-crash-index.html','games-pisti-index.html','games-snake-pro-index.html','games-space-pro-index.html','games-pattern-master-index.html','server-config-env.js','server-core-rewardPolicy.js','package.json','firebase.json','scripts-build-hosting.cjs']) assert(exists(name),`Missing: ${name}`);
+for(const name of ['index.html','admin','server.js','games-chess-index.html','games-crash-index.html','games-pisti-index.html','games-snake-pro-index.html','games-space-pro-index.html','server-config-env.js','server-core-rewardPolicy.js','package.json','firebase.json','scripts-build-hosting.cjs']) assert(exists(name),`Missing: ${name}`);
 for(const name of ['games','public','server','scripts','tests']) assert(!exists(name),`Unexpected nested directory: ${name}`);
 for(const entry of adminFiles) assert(entry.isFile(),`Nested admin file: ${entry.name}`);
 for(const entry of fs.readdirSync(root,{withFileTypes:true})) assert(entry.isFile() || entry.name==='admin' || entry.name==='dist',`Unexpected folder: ${entry.name}`);
@@ -46,6 +46,9 @@ assert.match(read('server.js'),/FIRESTORE_CLEANUP_ENABLED !== '1'/);
 assert(!read('server-routes-compat.routes.js').includes('profile.balance = memoryBalance'));
 assert(!read('public-js-home-legacy-home.runtime.js').includes('function buildHeroPromoSlides'));
 assert.match(read('server.js'),/allowedPublicAsset/);
+assert(!exists('games-pattern-master-index.html'),'Pattern Master must be removed');
+assert(!read('script.js').includes('games-pattern-master'),'Old game alias must be removed');
+assert.match(read('server.js'),/trust proxy.*1/);
 assert.match(read('server.js'),/games-\$\{safeSlug\}-index\.html/);
 assert.match(read('server-routes-economy.routes.js'),/UNAUTHORIZED_REWARD_FLOW_REMOVED/);
 assert.match(read('server-routes-content.routes.js'),/router\.put\('\/admin\/site\/content'/);
@@ -95,7 +98,7 @@ for(const name of sourceFiles.filter(name=>name.endsWith('.css'))){
   assert(fs.existsSync(asset),`Broken CSS asset: ${name} -> ${url}`);styles++;
  }
 }
-for(const item of ['games-chess-index.html','games-crash-index.html','games-pisti-index.html','games-snake-pro-index.html','games-space-pro-index.html','games-pattern-master-index.html']) {
+for(const item of ['games-chess-index.html','games-crash-index.html','games-pisti-index.html','games-snake-pro-index.html','games-space-pro-index.html']) {
  assert(hosting.hosting.rewrites.some(x=>x.destination==='/'+item),`Hosting rewrite missing ${item}`);
 }
 // Regression guards for discontinued XP payouts and first-five MC promotion.
