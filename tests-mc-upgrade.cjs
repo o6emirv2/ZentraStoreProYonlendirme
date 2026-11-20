@@ -59,15 +59,15 @@ function memoryDB(){
 async function testEconomy() {
   const memory=memoryDB();memory.col('users').set('a',{balance:10000,accountLevel:30,accountLevelProgressPct:99});
   const eco=loadMockEconomy(memory.db);
-  const spend=await eco.debitBalance({uid:'a',amount:1000,reason:'crash-bet',idempotencyKey:'round-a'});
+  const spend=await eco.debitBalance({uid:'a',amount:1000,reason:'pisti-bet',idempotencyKey:'round-a'});
   assert.equal(spend.balance,9000);
   assert.equal(memory.col('users').get('a').accountLevel,31);
   assert.equal(memory.col('users').get('a').accountLevelProgressPct,2);
-  const again=await eco.debitBalance({uid:'a',amount:1000,reason:'crash-bet',idempotencyKey:'round-a'});
+  const again=await eco.debitBalance({uid:'a',amount:1000,reason:'pisti-bet',idempotencyKey:'round-a'});
   assert.equal(again.duplicate,true);
   assert.equal(memory.col('users').get('a').balance,9000);
-  await assert.rejects(eco.debitBalance({uid:'a',amount:2000,reason:'crash-bet',idempotencyKey:'round-a'}),/TRANSACTION_KEY_CONFLICT/);
-  const reversal=await eco.creditBalance({uid:'a',amount:1000,reason:'crash-invite-refund',idempotencyKey:'refund-a'});
+  await assert.rejects(eco.debitBalance({uid:'a',amount:2000,reason:'pisti-bet',idempotencyKey:'round-a'}),/TRANSACTION_KEY_CONFLICT/);
+  const reversal=await eco.creditBalance({uid:'a',amount:1000,reason:'pisti-cancel-refund',idempotencyKey:'refund-a'});
   assert.equal(reversal.balance,10000);
   assert.equal(memory.col('users').get('a').accountLevel,30);
   assert.equal(memory.col('users').get('a').accountLevelProgressPct,99);

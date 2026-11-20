@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const { wager } = require('./server-core-gamePolicy.js');
 const { requireAuth } = require('./server-core-security.js');
 const { debitBalance, creditBalance, readBalance } = require('./server-core-economyService.js');
+const { settleChessWagers } = require('./server-core-chessSettlement.js');
+const { reconcileChessStakes } = require('./server-core-chessRecovery.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
 const { loadPolicy } = require('./server-core-botPolicy.js');
@@ -13,6 +15,15 @@ const rooms = new Map();
 const queue = new Map();
 let ioRef = null;
 const botTimers = new Map();
+// Single-process room state needs serialized writers until the room engine is
+// fully migrated to Firestore. This prevents local double joins/charges but
+// does not make multiple Render instances safe for paid Chess matches.
+let roomWriteTail = Promise.resolve();
+function withRoomWriteLock(fn){
+ const previous=roomWriteTail;
+ let release;roomWriteTail=new Promise(resolve=>{release=resolve;});
+ return previous.then(fn).finally(release);
+}
 
 const INITIAL_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const FREE_TIME_MS = 10 * 60 * 1000;
@@ -570,14 +581,16 @@ async function settleRoom(r, reason = '') {
   const isFreeReal = r.mode === 'free' && humans.length === 2;
   const draw = r.winnerColor === 'draw' || ['draw','stalemate','fifty-move-draw'].includes(r.result);
   if (isBetReal) {
-    if (draw) {
-      for (const p of humans) {
-        const credit = await creditBalance({ uid: p.uid, amount: Math.floor(r.bet / 2), reason: 'chess-draw-half-refund', idempotencyKey: `chess:draw:${r.id}:${p.uid}`, metadata: { roomId: r.id, result: r.result } }).catch((error) => ({ ok: false, error: error.message }));
-        r.settlement[p.uid] = credit;
-      }
-    } else if (r.winnerUid) {
-      const credit = await creditBalance({ uid: r.winnerUid, amount: r.pot, reason: 'chess-win', idempotencyKey: `chess:win:${r.id}:${r.winnerUid}`, metadata: { roomId: r.id, result: r.result } }).catch((error) => ({ ok: false, error: error.message }));
-      r.settlement[r.winnerUid] = credit;
+    // All stake outcomes are a single Firestore transaction, not sequential credits.
+    // A failure does not mark the room paid and remains retriable.
+    try {
+      const settlement=await settleChessWagers({roomId:r.id,players:humans.map(p=>p.uid),bet:r.bet,
+        winnerUid:draw?'':r.winnerUid,draw,result:r.result});
+      for (const pay of settlement.payouts || []) r.settlement[pay.uid]={ok:true,balance:pay.balance,amount:pay.amount};
+    } catch(error) {
+      r.settling=false;
+      console.error('[chess:settle:pending]',JSON.stringify({roomId:r.id,error:error.message}));
+      return r;
     }
     for (const p of humans) {
       const outcome = draw ? 'draw' : p.uid === r.winnerUid ? 'win' : 'loss';
@@ -674,8 +687,7 @@ async function enforceRoomLifecycle(r, context = '') {
   r.lifecycle = r.lifecycle || makeLifecycle(r.createdAt || t);
   const humans = liveHumanPlayers(r);
   if (humans.length >= 1 && !r.moves.length && t - (r.lastGameActionAt || r.createdAt || t) >= ROOM_IDLE_EMPTY_MS) {
-    await cancelAndDeleteRoom(r, 'inactivity-no-move');
-    return true;
+    return !!(await cancelAndDeleteRoom(r, 'inactivity-no-move'));
   }
   if (humans.length >= 2 && r.moves.length && t - (r.lastMoveAt || r.lastGameActionAt || r.createdAt || t) >= ROOM_IDLE_EMPTY_MS) {
     const inactive = r.players.find((p) => p.color === r.turn && isHumanPlayer(p));
@@ -882,7 +894,7 @@ router.get('/profile', requireAuth, asyncRoute(async (req, res) => {
   const progression = getProgression(profile);
   res.json({ ok: true, user: { ...profile, balance, accountLevel: progression.accountLevel, level: progression.accountLevel, accountLevelProgressPct: progression.accountLevelProgressPct, progression } });
 }));
-router.post('/create', requireAuth, asyncRoute(async (req, res) => {
+router.post('/create', requireAuth, asyncRoute(async (req, res) => withRoomWriteLock(async () => {
   const r = await createRoomFor(req, { bet: req.body?.bet || 0, mode: req.body?.mode || '' });
   let charged = { ok: true, balance: await readBalance(uidOf(req)) };
   if (r.players[0]?.uid === uidOf(req) && r.bet && !r.hostCharged) {
@@ -893,8 +905,8 @@ router.post('/create', requireAuth, asyncRoute(async (req, res) => {
   touchRoom(r);
   emitLobby();
   res.json({ ok: true, room: publicRoom(r, uidOf(req)), balance: charged.balance });
-}));
-router.post('/join', requireAuth, asyncRoute(async (req, res) => {
+})));
+router.post('/join', requireAuth, asyncRoute(async (req, res) => withRoomWriteLock(async () => {
   const viewerUid = uidOf(req);
   let r = null;
   if (req.body?.roomId) r = rooms.get(String(req.body.roomId));
@@ -912,7 +924,7 @@ router.post('/join', requireAuth, asyncRoute(async (req, res) => {
   }
   const { room, charged } = await joinRoomFor(req, r);
   res.json({ ok: true, room: publicRoom(room, viewerUid), balance: charged.balance });
-}));
+})));
 router.get('/state/:roomId', requireAuth, asyncRoute(async (req, res) => {
   const r = rooms.get(String(req.params.roomId));
   if (!r) return res.status(404).json({ ok: false, error: 'ROOM_NOT_FOUND' });
@@ -980,7 +992,10 @@ router.post('/leave', requireAuth, asyncRoute(async (req, res) => {
   if (!player) return res.status(403).json({ ok: false, error: 'NOT_IN_ROOM' });
   const reason = String(req.body.reason || '').toLowerCase();
   if (r.status === 'waiting') {
-    if (r.bet && player.uid === r.players[0]?.uid) await creditBalance({ uid: player.uid, amount: r.bet, reason: 'chess-waiting-room-refund', idempotencyKey: `chess:waiting-refund:${r.id}:${player.uid}` }).catch(() => null);
+    if (r.bet && player.uid === r.players[0]?.uid) {
+      const refund=await refundWaitingBet(r,player.uid,'chess-waiting-room-refund');
+      if(!refund?.ok)return res.status(503).json({ok:false,error:'REFUND_PENDING'});
+    }
     rooms.delete(r.id); emitLobby(); return res.json({ ok: true, room: null });
   }
   if (r.status === 'playing' && reason === 'unload') {
@@ -1058,9 +1073,11 @@ setInterval(async () => {
       }
     }
     if (r.status === 'waiting' && now() - (r.updatedAt || r.createdAt || now()) > ROOM_PRIMARY_MS) {
-      if (r.bet && r.players[0]?.uid) await refundWaitingBet(r, r.players[0].uid, 'chess-waiting-expire-refund').catch(() => null);
-      rooms.delete(k);
-      emitLobby();
+      const refund = r.bet && r.players[0]?.uid
+        ? await refundWaitingBet(r,r.players[0].uid,'chess-waiting-expire-refund')
+        : {ok:true};
+      if(refund?.ok){rooms.delete(k);emitLobby();}
+      else console.error('[chess:expired-refund:pending]',JSON.stringify({roomId:r.id,code:refund?.error||'UNKNOWN'}));
     }
     if (r.status === 'finished' && !r.settled && !r.settling) await settleRoom(r,'settlement-retry').catch(error=>console.error('[chess:settlement:retry]',error.message));
     if (r.status === 'finished' && r.settled && now() - (r.finishedAt || r.updatedAt || now()) > Number(process.env.CHESS_RESULT_RETENTION_MS || 120000)) {
@@ -1071,5 +1088,12 @@ setInterval(async () => {
   const qcut = now() - QUEUE_TTL_MS;
   for (const [uid, item] of queue) if (item.at < qcut) queue.delete(uid);
 }, 15000).unref();
+
+// When a process restarts mid-match, its in-memory board cannot be trusted as a
+// result. Recover un-settled escrow only after the entire 90-minute match window
+// plus a generous grace period; log the recovery instead of fabricating a win.
+setInterval(()=>reconcileChessStakes({activeRoomIds:new Set(rooms.keys())})
+ .then(out=>{if(out.refunded||out.pending)console.info('[chess:recovery]',JSON.stringify(out));})
+ .catch(error=>console.error('[chess:recovery:check-failed]',String(error?.message||error))),120000).unref();
 
 module.exports = { router, installSocket, _rooms: rooms, _engine: { parseFen, boardToFen, legalMoves, applyMove, isInCheck } };

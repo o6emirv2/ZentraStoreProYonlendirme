@@ -13,6 +13,7 @@ const { routeData } = require('./server-core-smartDataRouter.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const {presence} = require('./server-social-socialRuntimeStore.js');
 const messages=require('./server-social-messageService.js');
+const gameInvites=require('./server-social-gameInviteService.js');
 const { runSafeFirestoreCleanup } = require('./server-core-firestoreCleanupService.js');
 const { protectAsyncRoutes } = require('./server-core-asyncRoutes.js');
 const dataReadiness = require('./server-core-dataReadiness.js');
@@ -230,7 +231,8 @@ const CHAT_POLICY = Object.freeze({
 });
 function sanitizeSocketText(value = '', max = 500) { return String(value || '').trim().replace(/[<>]/g, '').slice(0, max); }
 async function authenticateSocket(socket) {
-  if (socket.data?.pmUid) return socket.data;
+  if (socket.data?.pmUid && Date.now() < Number(socket.data.pmAuthExpiryMs || 0)) return socket.data;
+  socket.data.pmUid='';
   const token = String(socket.handshake?.auth?.token || socket.handshake?.headers?.authorization || '').replace(/^Bearer\s+/i, '').trim();
   if (!token) return socket.data || {};
   try {
@@ -239,6 +241,7 @@ async function authenticateSocket(socket) {
     const decoded = await latest.auth.verifyIdToken(token);
     socket.data.pmUid = String(decoded.uid || '');
     socket.data.pmEmail = String(decoded.email || '');
+    socket.data.pmAuthExpiryMs = Number(decoded.exp || 0) * 1000;
     if (socket.data.pmUid) socket.join(`user:${socket.data.pmUid}`);
   } catch (error) {
     socket.emit('pm:auth_error', { ok:false, error:'BAD_TOKEN' });
@@ -278,18 +281,35 @@ io.on('connection', socket => {
     }catch(error){const result={ok:false,error:error.message||'CHAT_UNAVAILABLE'};socket.emit('chat:dm_error',result);emitCallback(done,result);}
   });
   socket.on('chat:typing', async (data = {}) => { const ctx = await authenticateSocket(socket); const fromUid = ctx.pmUid || ''; const toUid = sanitizeSocketText(data.toUid || data.targetUid || '', 160); if (fromUid && toUid) io.to(`user:${toUid}`).emit('chat:typing_status', { fromUid, isTyping: !!data.isTyping, at:Date.now() }); });
-  socket.on('game:invite_send', async (data = {}, done) => { const ctx = await authenticateSocket(socket); const hostUid = ctx.pmUid || ''; const targetUid = sanitizeSocketText(data.targetUid || '', 160); if (!hostUid || !targetUid) { const out = { ok:false, error:'INVITE_INVALID_PAYLOAD', message:'Davet için hedef kullanıcı gerekli.' }; socket.emit('game:invite_error', out); return emitCallback(done, out); } const inviteId=`invite_${crypto.randomUUID()}`; const invite = { id:inviteId, inviteId, hostUid, targetUid, roomId:sanitizeSocketText(data.roomId || '', 160), gameKey:sanitizeSocketText(data.gameKey || data.gameCode || 'chess', 40), gameName:sanitizeSocketText(data.gameName || 'Oyun Daveti', 80), at:Date.now() }; runtimeStore.gameInvites.set(invite.id, invite, 90 * 1000); io.to(`user:${targetUid}`).emit('game:invite_receive', invite); socket.emit('game:invite_success', invite); emitCallback(done, { ok:true, ...invite }); });
-  socket.on('game:invite_response',async (data={},done)=>{
-    const ctx=await authenticateSocket(socket);
-    const uid=ctx.pmUid||'';
-    const inviteId=String(data.inviteId||'');
-    const invite=runtimeStore.gameInvites.get(inviteId);
-    if(!uid||!invite||invite.targetUid!==uid)return emitCallback(done,{ok:false,error:'INVITE_NOT_FOUND'});
-    if(!['accepted','rejected'].includes(String(data.response)))return emitCallback(done,{ok:false,error:'INVALID_INVITE_RESPONSE'});
-    runtimeStore.gameInvites.delete(inviteId);
-    const out={...invite,response:data.response,guestUid:uid,at:Date.now()};
-    io.to(`user:${invite.hostUid}`).emit('game:invite_response',out);
-    emitCallback(done,{ok:true,...out});
+  socket.on('game:invite_send',async(data={},done)=>{
+    try {
+      const ctx=await authenticateSocket(socket);
+      if(!ctx.pmUid)throw Object.assign(new Error('AUTH_REQUIRED'),{statusCode:401});
+      const gameKey=String(data.gameKey||data.gameCode||'').trim().toLowerCase();
+      const roomId=String(data.roomId||'').trim();
+      const invite=await gameInvites.send({hostUid:ctx.pmUid,targetUid:String(data.targetUid||'').trim(),gameKey,
+        gameName:gameKey==='pisti'?'Online Pişti':'Satranç',roomId,
+        verifyRoom:async(db,{hostUid,roomId,gameKey})=>{
+          if(gameKey==='pisti'){
+            const doc=await db.collection('pistiRooms').doc(roomId).get();
+            if(!doc.exists||doc.data().status!=='waiting'||doc.data().players?.[0]?.uid!==hostUid)throw Object.assign(new Error('INVITE_ROOM_NOT_OWNED'),{statusCode:403});
+          }else{
+            const room=chessGame._rooms.get(roomId);
+            if(!room||room.status!=='waiting'||room.players?.[0]?.uid!==hostUid)throw Object.assign(new Error('INVITE_ROOM_NOT_OWNED'),{statusCode:403});
+          }
+        }});
+      io.to(`user:${invite.targetUid}`).emit('game:invite_receive',invite);
+      socket.emit('game:invite_success',invite);emitCallback(done,{ok:true,...invite});
+    }catch(error){const out={ok:false,error:String(error.message||'INVITE_SEND_FAILED')};socket.emit('game:invite_error',out);emitCallback(done,out);}
+  });
+  socket.on('game:invite_response',async(data={},done)=>{
+    try {
+      const ctx=await authenticateSocket(socket);
+      if(!ctx.pmUid)throw Object.assign(new Error('AUTH_REQUIRED'),{statusCode:401});
+      const out=await gameInvites.respond({uid:ctx.pmUid,inviteId:String(data.inviteId||''),response:String(data.response||'')});
+      io.to(`user:${out.hostUid}`).emit('game:invite_response',out);
+      emitCallback(done,{ok:true,...out});
+    }catch(error){emitCallback(done,{ok:false,error:String(error.message||'INVITE_RESPONSE_FAILED')});}
   });
   socket.on('game:matchmake_join', data => socket.emit('game:matchmake_joined', { ok:true, queued:false, gameType:data?.gameType || data?.game || 'unknown', message:'HTTP lobby active' }));
   socket.on('game:matchmake_leave', () => socket.emit('game:matchmake_left', { ok:true }));

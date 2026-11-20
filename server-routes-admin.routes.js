@@ -6,6 +6,7 @@ const { listAdminLogs, addAdminLog } = require('./server-admin-adminRuntimeLogSt
 const { runSafeFirestoreCleanup } = require('./server-core-firestoreCleanupService.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const { getProgression } = require('./server-core-progressionService.js');
+const {mutateBalance}=require('./server-core-economyService.js');
 
 const router = express.Router();
 const now = () => Date.now();
@@ -57,6 +58,7 @@ async function listUsers({ search = '', limit = 50 } = {}) {
     });
   } catch (error) {
     logAdmin({ user: {} , originalUrl: 'internal:listUsers' }, 'admin.users.list.error', { message: error.message });
+    throw error;
   }
   return rows;
 }
@@ -79,41 +81,31 @@ async function resolveUserIdentifier(identifier) {
   }
   return '';
 }
-async function incrementBalance(uid, amount, reason, req) {
-  const { db, admin } = fb();
-  if (!uid || !amount) return { ok: false, error: 'UID_AMOUNT_REQUIRED' };
-  const safeAmount = Math.trunc(Number(amount) || 0);
-  const key = `admin-economy:${uid}:${crypto.randomUUID()}`;
-  if (!db || !admin) {
-    logAdmin(req, 'admin.balance.local', { uid, amount: safeAmount, reason, key });
-    return { ok: true, firestore: false, amount: safeAmount };
-  }
-  let nextBalance = 0;
-  await db.runTransaction(async (tx) => {
-    const userRef = db.collection('users').doc(uid);
-    const snap = await tx.get(userRef);
-    const current = Math.max(0, Number((snap.exists ? snap.data().balance : 0) || 0));
-    if (safeAmount < 0 && current + safeAmount < 0) throw Object.assign(new Error('INSUFFICIENT_BALANCE'), { statusCode: 409, current });
-    nextBalance = Math.max(0, current + safeAmount);
-    const auditRef = db.collection('audit').doc(key);
-    tx.set(userRef, { balance: nextBalance, updatedAt: now() }, { merge: true });
-    tx.set(auditRef, { uid, amount: safeAmount, reason, balanceAfter: nextBalance, actor: adminActor(req), type: 'admin-balance', at: now() }, { merge: true });
-  });
-  logAdmin(req, 'admin.balance.update', { uid, amount: safeAmount, reason, key, balanceAfter: nextBalance });
-  return { ok: true, firestore: true, amount: safeAmount, balance: nextBalance };
+async function incrementBalance(uid,amount,reason,req){
+ const value=Number(amount),requestId=String(req.body?.requestId||'').trim();
+ if(!/^[a-zA-Z0-9_-]{8,100}$/.test(requestId))throw Object.assign(new Error('REQUEST_ID_REQUIRED'),{statusCode:400});
+ if(!/^[a-zA-Z0-9_-]{6,128}$/.test(uid))throw Object.assign(new Error('INVALID_TARGET_UID'),{statusCode:400});
+ if(!Number.isSafeInteger(value)||value===0||Math.abs(value)>10000000)throw Object.assign(new Error('INVALID_AMOUNT'),{statusCode:400});
+ const result=await mutateBalance({uid,amount:value,reason:'admin-balance-adjustment',
+   idempotencyKey:`admin-balance:${req.user.uid}:${requestId}`,
+   metadata:{actorUid:req.user.uid,reason:String(reason||'admin-adjustment').slice(0,120),requestId}});
+ if(result.ok&&!result.duplicate)logAdmin(req,'admin.balance.update',{uid,amount:value,reason,requestId,balanceAfter:result.balance});
+ return result;
 }
 
-router.get('/admin/summary', async (req, res) => {
-  const { db, enabled } = fb();
-  let users = 0, banned = 0, totalBalance = 0;
-  if (db) {
-    try {
-      const snap = await db.collection('users').limit(200).get();
-      users = snap.size;
-      snap.forEach((doc) => { const data = doc.data() || {}; if (data.banned) banned += 1; totalBalance += Number(data.balance || 0); });
-    } catch (error) { logAdmin(req, 'admin.summary.error', { message: error.message }); }
-  }
-  res.json({ ok: true, firebaseEnabled: !!enabled, metrics: { users, banned, totalBalance, runtimeLogs: listAdminLogs().length, runtimeStores: Object.fromEntries(Object.entries(runtimeStore).map(([key, store]) => [key, typeof store.size === 'function' ? store.size() : 0])) }, actor: adminActor(req), at: now() });
+router.get('/admin/summary',async(req,res,next)=>{
+ try{
+  const {db,enabled}=fb();
+  if(!db)return res.status(503).json({ok:false,error:'DATA_NOT_READY'});
+  const snap=await db.collection('users').limit(200).get();
+  let banned=0,totalBalance=0;
+  snap.forEach(doc=>{const data=doc.data()||{};if(data.banned)banned++;
+    const balance=Number(data.balance);if(!Number.isSafeInteger(balance)||balance<0)throw Object.assign(new Error('INVALID_BALANCE'),{statusCode:409});
+    totalBalance+=balance;});
+  res.json({ok:true,firebaseEnabled:!!enabled,
+    metrics:{users:snap.size,banned,totalBalance,partial:snap.size===200,runtimeLogs:listAdminLogs().length},
+    actor:adminActor(req),at:now()});
+ }catch(error){next(error);}
 });
 
 router.get('/admin/users', async (req, res) => {
@@ -124,7 +116,7 @@ router.get('/admin/users', async (req, res) => {
 router.get('/admin/users/:uid', async (req, res) => {
   const uid = safe(req.params.uid, 160);
   const { db } = fb();
-  if (!db) return res.json({ ok: true, user: publicUser(uid, { uid }), firestore: false });
+  if (!db) return res.status(503).json({ok:false,error:'DATA_NOT_READY'});
   const snap = await db.collection('users').doc(uid).get();
   if (!snap.exists) return res.status(404).json({ ok: false, error: 'USER_NOT_FOUND' });
   res.json({ ok: true, user: publicUser(uid, snap.data() || {}) });
@@ -132,7 +124,7 @@ router.get('/admin/users/:uid', async (req, res) => {
 
 router.post('/admin/users/balance', strictLimiter, async (req, res) => {
   const uid = safe(req.body.uid, 160);
-  const amount = money(req.body.amount);
+  const amount = Number(req.body.amount);
   const reason = safe(req.body.reason || 'admin-adjustment', 120);
   try {
     const result = await incrementBalance(uid, amount, reason, req);
@@ -286,8 +278,8 @@ router.post('/admin/matrix/restrict-user', strictLimiter, async (req, res, next)
 router.post('/admin/matrix/reward-user', strictLimiter, async (req, res, next) => {
   try {
     if (String(req.body?.confirmText || '').toUpperCase() !== 'ONAYLIYORUM') return res.status(400).json({ok:false,error:'CONFIRM_REQUIRED'});
-    const amount = nonNegativeMoney(req.body?.amount);
-    if (amount <= 0) return res.status(400).json({ok:false,error:'INVALID_AMOUNT'});
+    const amount = Number(req.body?.amount);
+    if (!Number.isSafeInteger(amount)||amount <= 0||amount>10000000) return res.status(400).json({ok:false,error:'INVALID_AMOUNT'});
     const uid = await resolveUserIdentifier(req.body?.identifier);
     if (!uid) return res.status(404).json({ok:false,error:'USER_NOT_FOUND'});
     const result = await incrementBalance(uid,amount,safe(req.body?.reason || 'admin-matrix-reward',120),req);

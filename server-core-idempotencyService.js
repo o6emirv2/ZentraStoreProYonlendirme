@@ -1,18 +1,27 @@
-const { runtimeStore } = require('./server-core-runtimeStore.js');
-async function runOnce({ key, db, collection = 'idempotency', ttlMs = 30 * 86400000, execute }) {
-  if (!key) throw new Error('IDEMPOTENCY_KEY_REQUIRED');
-  if (runtimeStore.temporary.get(`idem:${key}`)) return { ok: true, duplicate: true };
-  if (db) {
-    const ref = db.collection(collection).doc(String(key));
-    const snap = await ref.get();
-    if (snap.exists) return { ok: true, duplicate: true, stored: true };
-    const result = execute ? await execute() : {};
-    await ref.set({ key, createdAt: Date.now(), expiresAt: Date.now() + ttlMs, result: result || {} }, { merge: false });
-    runtimeStore.temporary.set(`idem:${key}`, true, Math.min(ttlMs, 3600000));
-    return { ok: true, duplicate: false, result };
+'use strict';
+const crypto = require('node:crypto');
+
+// Generic once-only operations must be recorded and executed in the SAME transaction.
+// A process-local lock or a read-followed-by-write is not safe across Render instances.
+async function runOnce({key, db, collection='idempotency', ttlMs=30*86400000, execute}) {
+  if (typeof key !== 'string' || !key.trim() || key.length > 400) throw new Error('IDEMPOTENCY_KEY_REQUIRED');
+  if (!db || typeof db.runTransaction !== 'function') {
+    throw Object.assign(new Error('DATA_NOT_READY'), {statusCode:503});
   }
-  const result = execute ? await execute() : {};
-  runtimeStore.temporary.set(`idem:${key}`, true, ttlMs);
-  return { ok: true, duplicate: false, result };
+  const id = crypto.createHash('sha256').update(key).digest('hex');
+  const ref = db.collection(collection).doc(id);
+  return db.runTransaction(async (tx) => {
+    const existing = await tx.get(ref);
+    if (existing.exists) {
+      if (existing.data().key !== key) throw Object.assign(new Error('TRANSACTION_KEY_CONFLICT'),{statusCode:409});
+      return {ok:true, duplicate:true, stored:true, result:existing.data().result || {}};
+    }
+    // execute() MUST be a deterministic, side-effect-free calculation. External writes
+    // belong in this transaction, not inside execute().
+    const result = execute ? await execute() : {};
+    const at = Date.now();
+    tx.create(ref, {key, createdAt:at, expiresAt:new Date(at+ttlMs), result:result || {}});
+    return {ok:true, duplicate:false, result:result || {}};
+  });
 }
-module.exports = { runOnce };
+module.exports = {runOnce};

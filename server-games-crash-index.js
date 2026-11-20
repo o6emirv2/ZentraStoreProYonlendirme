@@ -560,6 +560,26 @@ function tick() {
   else emitState();
 }
 
+async function reconcileAbandonedBets() {
+ const {db}=initFirebaseAdmin();if(!db)return {checked:0,refunded:0};
+ const staleBefore=Date.now()-15*60*1000;
+ const snap=await db.collection('crashBets').where('status','==','active').limit(100).get();
+ let checked=0,refunded=0;
+ for(const row of snap.docs){
+   const bet=row.data()||{};checked++;
+   if(!Number.isSafeInteger(bet.amount)||bet.amount<=0||Number(bet.placedAt||0)>staleBefore)continue;
+   if(bet.roundId===state.roundId&&['COUNTDOWN','FLYING'].includes(state.phase))continue;
+   try{
+     const result=await creditBalance({uid:bet.uid,amount:bet.amount,reason:'crash-invite-refund',
+       idempotencyKey:`crash:refund:${bet.roundId}:${bet.uid}:${bet.box}`,
+       metadata:{roundId:bet.roundId,box:bet.box,refundOfBet:true}});
+     if(result.ok&&!result.duplicate)refunded++;
+   }catch(error){if(!['BET_ALREADY_SETTLED','TRANSACTION_KEY_CONFLICT'].includes(error.message))console.error('[crash:reconcile]',JSON.stringify({code:String(error.message||error).slice(0,100)}));}
+ }
+ return {checked,refunded};
+}
+setInterval(()=>reconcileAbandonedBets().catch(e=>console.error('[crash:reconcile-failed]',String(e.message||e))),60000).unref();
+
 async function ensureRoundStarted() {
   if (state.roundId) return;
   if (state.roundStartPromise) return state.roundStartPromise;
@@ -596,11 +616,21 @@ router.post('/bet', requireAuth, async (req, res, next) => {
     const box = Math.max(1, Math.min(2, Math.trunc(Number(req.body.box) || 1)));
     const amount = parseBetAmount(req.body.amount);
     const autoCashout = parseAutoCashout(req.body.autoCashout);
-    const key = `${state.roundId}:${uid}:${box}`;
+    const roundId=state.roundId;
+    const key = `${roundId}:${uid}:${box}`;
     const existing = state.bets.get(key);
     if (existing) return res.json({ ok: true, duplicate: true, bet: publicBet(existing, uid), balance: await readBalance(uid), roundId: state.roundId });
     const debit = await debitBalance({ uid, amount, reason: 'crash-bet', idempotencyKey: `crash:bet:${key}`, metadata: { roundId: state.roundId, box, autoCashout } });
     if (!debit.ok) return res.status(debit.error === 'DATA_NOT_READY' ? 503 : 409).json(debit);
+    // A network delay can allow the round to close while an atomic debit is pending.
+    // Never orphan that stake: return it through the same durable wager record.
+    if (state.roundId !== roundId || state.phase !== 'COUNTDOWN') {
+      await creditBalance({uid,amount,reason:'crash-invite-refund',idempotencyKey:`crash:refund:${key}`,
+        metadata:{roundId,box,refundOfBet:true}});
+      return res.status(409).json({ok:false,error:'BET_WINDOW_CLOSED',balance:await readBalance(uid)});
+    }
+    const latest=state.bets.get(key);
+    if (latest) return res.json({ok:true,duplicate:true,bet:publicBet(latest,uid),balance:await readBalance(uid),roundId});
     const profile = await readCrashProfile(req).catch(() => ({ username: safeDisplayName(req.user), avatar: '' }));
     const bet = { betId: key, roundId: state.roundId, uid, username: profile.username || safeDisplayName(req.user), avatar: safeAvatarUrl(profile.avatar || profile.photoURL || ''), box, amount, autoCashout, cashed: false, lost: false, refunded: false, refunding: false, cashingOut: false, settlementPending: false, winAmount: 0, cashoutMult: 0, at: now() };
     state.bets.set(key, bet);

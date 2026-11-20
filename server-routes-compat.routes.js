@@ -4,6 +4,7 @@ const env = require('./server-config-env.js');
 const { requireAuth, requireAdmin, strictLimiter } = require('./server-core-security.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
+const sessions = require('./server-core-sessionService.js');
 const {presence} = require('./server-social-socialRuntimeStore.js');
 const { getProgression } = require('./server-core-progressionService.js');
 const friendships=require('./server-social-friendshipService.js');
@@ -116,7 +117,7 @@ function lbItems(list, metric) {
   });
 }
 function gameProfileFromReq(req, fallbackName = 'Oyuncu') { const u = req.__pmProfile || {}; return { uid: uidOf(req), username: u.username || u.displayName || fallbackName, avatar: u.avatar || DEFAULT_AVATAR,  }; }
-async function attachProfile(req, _res, next) { try { req.__pmProfile = await readProfile(req, uidOf(req)); } catch (_) { req.__pmProfile = defaultProfile(req, uidOf(req)); } next(); }
+async function attachProfile(req, _res, next) { try { req.__pmProfile = await readProfile(req, uidOf(req)); next(); } catch(error) { next(error); } }
 
 function matrixSecret() {
   return [process.env.ADMIN_PANEL_SECOND_FACTOR_HASH_HEX || '', process.env.ADMIN_PANEL_SECOND_FACTOR_SALT_HEX || '', process.env.ADMIN_PANEL_THIRD_FACTOR_NAME || '', process.env.ADMIN_UIDS || '', process.env.ADMIN_EMAILS || '', process.env.FIREBASE_PROJECT_ID || '', 'playmatrix_admin_matrix_v2'].join('|');
@@ -141,36 +142,72 @@ function verifyThirdFactor(name=''){ const expected=String(process.env.ADMIN_PAN
 function issueClientKey(payload={}){ return signMatrix({ typ:'pm_admin_client_key', ...payload, issuedAt:now(), expiresAt:now()+12*3600000, nonce:crypto.randomBytes(10).toString('hex') }); }
 function verifyClientKey(key=''){ const payload=verifyMatrixToken(key); if(!payload||payload.typ!=='pm_admin_client_key')return {ok:false,code:'INVALID_CLIENT_KEY'}; if(Number(payload.expiresAt||0)<now())return {ok:false,code:'CLIENT_KEY_EXPIRED'}; return {ok:true,payload}; }
 function adminContext(uid='',email=''){ return { isAdmin:true, uid, email, role:'owner', roles:['owner'], permissions:['admin.read','users.read','users.write','rewards.write','rewards.read','system.read','moderation.write'], source:'env', resolutionChain:['env:ADMIN_EMAILS','env:ADMIN_UIDS'] }; }
-function sessionFromReq(req){ const token=String(req.headers['x-session-token']||'').trim(); if(!token)return null; const session=runtimeStore.temporary.get(`session:${token}`); return session?.uid?{token,...session}:null; }
-router.get('/auth/admin/matrix/identity',(req,res)=>{ const session=sessionFromReq(req); if(session&&isConfiguredAdmin(session.email,session.uid))return res.json({ok:true,authenticated:true,admin:true,user:{uid:session.uid,email:session.email},adminContext:adminContext(session.uid,session.email)}); const primary=primaryAdmin(); if(!primary.email)return res.status(401).json({ok:false,authenticated:false,admin:false,user:null,error:'ADMIN_ENV_MISSING'}); return res.json({ok:true,authenticated:false,admin:true,user:primary,adminContext:adminContext(primary.uid,primary.email),manualFallback:true}); });
+async function sessionFromReq(req){
+ const token=sessions.tokenFromRequest(req);
+ const session=await sessions.lookup(token);
+ return session?.uid?{token,...session}:null;
+}
+router.get('/auth/admin/matrix/identity',async(req,res,next)=>{
+ try{
+  const session=await sessionFromReq(req);
+  if(session&&isConfiguredAdmin(session.email,session.uid))return res.json({ok:true,authenticated:true,admin:true,user:{uid:session.uid,email:session.email},adminContext:adminContext(session.uid,session.email)});
+  return res.json({ok:true,authenticated:false,admin:false,user:null});
+ }catch(error){next(error);}
+});
 router.post('/auth/admin/matrix/step-email',requireAuth,requireAdmin,strictLimiter,(req,res)=>{ const primary=primaryAdmin(); const email=String(req.user.email||'').trim().toLowerCase(); const uid=String(req.user.uid||''); if(!email||!isConfiguredAdmin(email,uid))return res.status(401).json({ok:false,error:'Yönetici e-postası yetkili listede değil.'}); res.json({ok:true,boundToSession:true,manualFallback:false,email,ticket:signMatrix({typ:'pm_admin_step',uid,email,stage:2,issuedAt:now(),expiresAt:now()+7*60000,nonce:crypto.randomBytes(12).toString('hex')}),admin:adminContext(uid,email)}); });
 router.post('/auth/admin/matrix/step-password',requireAuth,requireAdmin,strictLimiter,(req,res)=>{ const payload=verifyMatrixToken(req.body?.ticket||''); if(!payload||payload.typ!=='pm_admin_step'||Number(payload.stage)!==2||Number(payload.expiresAt||0)<now())return res.status(401).json({ok:false,error:'Güvenlik oturumu geçersiz.'}); if(!verifySecondFactor(req.body?.password||''))return res.status(403).json({ok:false,error:'Güvenlik şifresi doğrulanamadı.'}); res.json({ok:true,ticket:signMatrix({...payload,stage:3,prev:'identity+password',issuedAt:now(),expiresAt:now()+7*60000})}); });
-router.post('/auth/admin/matrix/step-name',requireAuth,requireAdmin,strictLimiter,(req,res)=>{ const payload=verifyMatrixToken(req.body?.ticket||''); if(!payload||payload.typ!=='pm_admin_step'||Number(payload.stage)!==3||Number(payload.expiresAt||0)<now())return res.status(401).json({ok:false,error:'Güvenlik oturumu geçersiz.'}); if(!verifyThirdFactor(req.body?.adminName||req.body?.name||''))return res.status(403).json({ok:false,error:'Son güvenlik doğrulaması başarısız oldu.'}); if(!isConfiguredAdmin(payload.email,payload.uid)||payload.uid!==req.user.uid)return res.status(403).json({ok:false,error:'Yönetici yetkisi doğrulanamadı.'}); const sessionToken=crypto.randomBytes(32).toString('hex'); const sessionId=crypto.randomBytes(12).toString('hex'); runtimeStore.temporary.set(`session:${sessionToken}`,{uid:payload.uid,email:payload.email,sessionSource:'admin_matrix',sessionId,at:now()},12*3600000); const clientKey=issueClientKey({uid:payload.uid,email:payload.email,sessionId}); res.setHeader('Set-Cookie',`pm_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`); res.json({ok:true,redirectTo:'/admin/admin.html',sessionToken,clientKey,admin:adminContext(payload.uid,payload.email)}); });
-router.get('/auth/admin/matrix/status',(req,res)=>{ const session=sessionFromReq(req); if(!session||!isConfiguredAdmin(session.email,session.uid))return res.status(401).json({ok:false,authenticated:false,redirectTo:'/admin/index.html',error:'Yönetici oturumu bulunamadı.'}); const keyState=verifyClientKey(req.headers['x-admin-client-key']||''); if(!keyState.ok)return res.status(403).json({ok:false,authenticated:true,redirectTo:'/admin/index.html',code:keyState.code,error:'Yönetici güvenlik anahtarı doğrulanamadı.'}); res.json({ok:true,authenticated:true,user:{uid:session.uid,email:session.email},admin:adminContext(session.uid,session.email),clientKey:issueClientKey({uid:session.uid,email:session.email,sessionId:session.sessionId||''})}); });
-router.post('/auth/admin/bootstrap', requireAuth, strictLimiter, (req,res)=>{ const uid=String(req.user?.uid||''); const email=String(req.user?.email||'').trim().toLowerCase(); if(!isConfiguredAdmin(email,uid))return res.status(403).json({ok:false,error:'ADMIN_REQUIRED'}); const sessionToken=crypto.randomBytes(32).toString('hex'); const sessionId=crypto.randomBytes(12).toString('hex'); runtimeStore.temporary.set(`session:${sessionToken}`,{uid,email,sessionSource:'firebase_admin_bootstrap',sessionId,at:now()},12*3600000); const clientKey=issueClientKey({uid,email,sessionId}); res.setHeader('Set-Cookie',`pm_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`); res.json({ok:true,authenticated:true,sessionToken,clientKey,admin:adminContext(uid,email)}); });
-router.post('/auth/admin/matrix/logout',(req,res)=>{ const token=String(req.headers['x-session-token']||'').trim(); if(token)runtimeStore.temporary.delete(`session:${token}`); res.setHeader('Set-Cookie','pm_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'); res.json({ok:true}); });
+router.post('/auth/admin/matrix/step-name',requireAuth,requireAdmin,strictLimiter,async(req,res,next)=>{
+ try{
+  const payload=verifyMatrixToken(req.body?.ticket||'');
+  if(!payload||payload.typ!=='pm_admin_step'||Number(payload.stage)!==3||Number(payload.expiresAt||0)<now())return res.status(401).json({ok:false,error:'Güvenlik oturumu geçersiz.'});
+  if(payload.uid!==req.user.uid||String(payload.email||'').toLowerCase()!==String(req.user.email||'').toLowerCase())return res.status(403).json({ok:false,error:'Yönetici kimliği eşleşmiyor.'});
+  if(!verifyThirdFactor(req.body?.adminName||req.body?.name||''))return res.status(403).json({ok:false,error:'Son güvenlik doğrulaması başarısız oldu.'});
+  if(!isConfiguredAdmin(payload.email,payload.uid))return res.status(403).json({ok:false,error:'Yönetici yetkisi doğrulanamadı.'});
+  const issued=await sessions.issue({uid:payload.uid,email:payload.email,sessionSource:'admin_matrix',ttlMs:12*3600000});
+  const clientKey=issueClientKey({uid:payload.uid,email:payload.email,sessionId:issued.sessionId});
+  res.setHeader('Set-Cookie',sessions.cookie(issued.token,43200));
+  res.json({ok:true,redirectTo:'/admin/admin.html',sessionToken:issued.token,clientKey,admin:adminContext(payload.uid,payload.email)});
+ }catch(error){next(error);}
+});
+router.get('/auth/admin/matrix/status',async(req,res,next)=>{
+ try{
+  const session=await sessionFromReq(req);
+  if(!session||!isConfiguredAdmin(session.email,session.uid))return res.status(401).json({ok:false,authenticated:false,redirectTo:'/admin/index.html',error:'Yönetici oturumu bulunamadı.'});
+  const keyState=verifyClientKey(req.headers['x-admin-client-key']||'');
+  if(!keyState.ok||keyState.payload.uid!==session.uid||keyState.payload.sessionId!==session.sessionId)return res.status(403).json({ok:false,authenticated:true,redirectTo:'/admin/index.html',code:'INVALID_CLIENT_KEY',error:'Yönetici güvenlik anahtarı doğrulanamadı.'});
+  res.json({ok:true,authenticated:true,user:{uid:session.uid,email:session.email},admin:adminContext(session.uid,session.email),clientKey:issueClientKey({uid:session.uid,email:session.email,sessionId:session.sessionId})});
+ }catch(error){next(error);}
+});
+router.post('/auth/admin/bootstrap',requireAuth,strictLimiter,async(req,res,next)=>{
+ try{
+  const uid=String(req.user?.uid||'');const email=String(req.user?.email||'').trim().toLowerCase();
+  if(!isConfiguredAdmin(email,uid))return res.status(403).json({ok:false,error:'ADMIN_REQUIRED'});
+  const issued=await sessions.issue({uid,email,sessionSource:'firebase_admin_bootstrap',ttlMs:12*3600000});
+  const clientKey=issueClientKey({uid,email,sessionId:issued.sessionId});
+  res.setHeader('Set-Cookie',sessions.cookie(issued.token,43200));
+  res.json({ok:true,authenticated:true,sessionToken:issued.token,clientKey,admin:adminContext(uid,email)});
+ }catch(error){next(error);}
+});
+router.post('/auth/admin/matrix/logout',async(req,res,next)=>{
+ try{await sessions.revoke(sessions.tokenFromRequest(req));res.setHeader('Set-Cookie',sessions.cookie('',0));res.json({ok:true});}catch(error){next(error);}
+});
 
 router.get('/healthz', (_req, res) => res.json({ ok: true, service: 'playmatrix-api', at: now() }));
-router.post('/auth/resolve-login', strictLimiter, async (req, res) => { const id = s(req.body?.identifier || req.body?.email || req.body?.username, 160); if (!id) return res.status(400).json({ ok: false, error: 'IDENTIFIER_REQUIRED' }); if (id.includes('@')) return res.json({ ok: true, email: id.toLowerCase() }); const { db } = fb(); if (!db) return res.status(404).json({ ok: false, error: 'USER_NOT_FOUND' }); const q = await db.collection('users').where('usernameLower', '==', id.toLowerCase()).limit(1).get(); if (q.empty || !q.docs[0].data().email) return res.status(404).json({ ok: false, error: 'USER_NOT_FOUND' }); res.json({ ok: true, email: q.docs[0].data().email }); });
-router.post('/auth/session/create', requireAuth, async (req, res) => { const token = crypto.randomBytes(32).toString('hex'); const uid = uidOf(req); runtimeStore.temporary.set(`session:${token}`, { uid, email: req.user?.email || '', at: now() }, 30 * 86400000); const user = await readProfile(req, uid, { email: req.user?.email || '' }); res.json({ ok: true, sessionToken: token, session: { token, expiresAt: now() + 30 * 86400000 }, user }); });
-router.post('/auth/session/logout', (req, res) => { const token = s(req.headers['x-session-token'] || req.body?.sessionToken, 100); if (token) runtimeStore.temporary.delete(`session:${token}`); res.json({ ok: true }); });
-router.get('/auth/session/status', (req, res) => { const token = s(req.headers['x-session-token'] || req.query?.sessionToken, 100); res.json({ ok: true, active: !!(token && runtimeStore.temporary.get(`session:${token}`)) }); });
-router.get('/me', requireAuth, async (req, res) => res.json({ ok: true, user: await readProfile(req) }));
-router.post('/me/activity/heartbeat', requireAuth, async (req, res) => { const uid = uidOf(req); runtimeStore.presence.set(uid, { uid, status: 'online', activity: s(req.body?.activity, 40), at: now() }, 180000); res.json({ ok: true, at: now() }); });
-router.post('/me/showcase', requireAuth, async (req, res) => { const uid = uidOf(req); const showcase = { title: s(req.body?.title, 60), bio: sanitizeText(req.body?.bio || '', 180), updatedAt: now() }; await writeProfile(uid, { showcase }); res.json({ ok: true, showcase }); });
-router.get('/leaderboard', async (_req,res)=>{
-  const profiles=await leaderboardProfiles();
-  const byLevel=[...profiles].sort((a,b)=>{
-    const x=getProgression(a),y=getProgression(b);
-    return y.level-x.level || y.progressPercent-x.progressPercent;
-  });
-  const byActivity=[...profiles].sort((a,b)=>Number(b.monthlyActiveScore||0)-Number(a.monthlyActiveScore||0));
-  res.json({ok:true,generatedAt:now(),tabs:{
-    level:{label:'En Yüksek Hesap Seviyesi',metricKey:'accountLevel',items:lbItems(byLevel.slice(0,25),'level')},
-    activity:{label:'En Çok Aktif Oyuncular',metricKey:'monthlyActiveScore',items:lbItems(byActivity.slice(0,25),'activity')}
-  }});
+router.post('/auth/resolve-login', strictLimiter, async (req, res) => { const id = s(req.body?.identifier || req.body?.email || req.body?.username, 160); if (!id) return res.status(400).json({ ok: false, error: 'IDENTIFIER_REQUIRED' }); if (id.includes('@')) return res.json({ ok: true, email: id.toLowerCase() }); const { db } = fb(); if (!db) return res.status(503).json({ ok:false, error:'DATA_NOT_READY' }); const q = await db.collection('users').where('usernameLower', '==', id.toLowerCase()).limit(1).get(); if (q.empty || !q.docs[0].data().email) return res.status(404).json({ ok: false, error: 'USER_NOT_FOUND' }); res.json({ ok: true, email: q.docs[0].data().email }); });
+router.post('/auth/session/create',requireAuth,async(req,res,next)=>{
+ try{const uid=uidOf(req),user=await readProfile(req,uid,{email:req.user?.email||''});
+  const issued=await sessions.issue({uid,email:req.user?.email||'',ttlMs:30*86400000});
+  res.setHeader('Set-Cookie',sessions.cookie(issued.token,30*86400));
+  res.json({ok:true,sessionToken:issued.token,session:{token:issued.token,expiresAt:issued.expiresAt},user});
+ }catch(error){next(error);}
 });
-router.get('/check-username', requireAuth, async (req, res) => { const username = s(req.query.username, 32); if (username.length < 3) return res.json({ ok: true, available: false }); const { db } = fb(); if (!db) return res.json({ ok: true, available: true }); const snap = await db.collection('users').where('usernameLower', '==', username.toLowerCase()).limit(1).get(); res.json({ ok: true, available: snap.empty }); });
+router.post('/auth/session/logout',async(req,res,next)=>{
+ try{await sessions.revoke(sessions.tokenFromRequest(req)||s(req.body?.sessionToken,100));res.setHeader('Set-Cookie',sessions.cookie('',0));res.json({ok:true});}catch(error){next(error);}
+});
+router.get('/auth/session/status',async(req,res,next)=>{
+ try{const token=sessions.tokenFromRequest(req)||s(req.query?.sessionToken,100);res.json({ok:true,active:!!(await sessions.lookup(token))});}catch(error){next(error);}
+});
+router.get('/check-username', requireAuth, async (req, res) => { const username = s(req.query.username, 32); if (username.length < 3) return res.json({ ok: true, available: false }); const { db } = fb(); if (!db) return res.status(503).json({ok:false,error:'DATA_NOT_READY'}); const snap = await db.collection('users').where('usernameLower', '==', username.toLowerCase()).limit(1).get(); res.json({ ok: true, available: snap.empty }); });
 router.post('/profile/update', requireAuth, async (req, res) => { const uid = uidOf(req); const patch = { fullName: s(req.body?.fullName, 80), username: s(req.body?.username, 32), avatar: s(req.body?.avatar, 1000) }; if (patch.username) patch.usernameLower = patch.username.toLowerCase(); Object.keys(patch).forEach(k => { if (patch[k] === '') delete patch[k]; }); await writeProfile(uid, patch); res.json({ ok: true, user: await readProfile(req, uid) }); });
 
 router.get('/notifications', requireAuth, (_req, res) => res.json({ ok: true, items: [], unread: 0, summary: { total: 0, unread: 0 } }));
@@ -201,7 +238,21 @@ router.post('/friends/request',requireAuth,friendRoute(async(req)=>{
 }));
 router.post('/friends/respond',requireAuth,friendRoute(req=>friendships.respond(friendships.requireDb(),uidOf(req),req.body.friendshipId,req.body.action)));
 router.post('/friends/remove',requireAuth,friendRoute(req=>friendships.remove(friendships.requireDb(),uidOf(req),req.body.friendshipId,req.body.targetUid)));
-router.get('/social-center/summary', requireAuth, async (req, res) => { const uid = uidOf(req); const online = presence.values().filter(x => Number(x?.at || 0) > Date.now() - 180000).length; let accepted = 0; let incoming = 0; try { const { db } = fb(); if (db && uid) { const snap = await db.collection('friendships').where('members','array-contains',uid).limit(100).get(); snap.docs.forEach((doc) => { const data = doc.data() || {}; if (data.status === 'accepted') accepted += 1; else if (data.toUid === uid && data.status === 'pending') incoming += 1; }); } } catch (_) {} const notificationCount = runtimeStore.notifications.values().filter(x => x && typeof x === 'object' && (!x.userId || x.userId === uid) && (!x.uid || x.uid === uid) && (!x.targetUid || x.targetUid === uid)).length; res.json({ ok: true, me: await readProfile(req), chatPolicy: CHAT_POLICY, counts: { friends: accepted, incoming, notifications: notificationCount, online }, features: { globalChat: true, localChat: true, dm: true, presence: 'memory' } }); });
+router.get('/social-center/summary',requireAuth,async(req,res,next)=>{
+ try{
+  const uid=uidOf(req),{db}=fb();
+  if(!db)return res.status(503).json({ok:false,error:'DATA_NOT_READY'});
+  const snap=await db.collection('friendships').where('members','array-contains',uid).limit(100).get();
+  let accepted=0,incoming=0;
+  for(const d of snap.docs){const row=d.data()||{};if(row.status==='accepted')accepted++;
+    else if(row.toUid===uid&&row.status==='pending')incoming++;}
+  const online=presence.values().filter(x=>Number(x?.at||0)>Date.now()-180000).length;
+  const notificationCount=runtimeStore.notifications.values().filter(x=>x&&(x.uid===uid||x.userId===uid||x.targetUid===uid)).length;
+  res.json({ok:true,me:await readProfile(req),chatPolicy:CHAT_POLICY,
+   counts:{friends:accepted,incoming,notifications:notificationCount,online},
+   features:{globalChat:true,localChat:true,dm:true,presence:'ephemeral'}});
+ }catch(error){next(error);}
+});
 router.get('/activity-pass', requireAuth, (_req, res) => res.json({ ok: true, active: true, claimable: false }));
 router.post('/activity-pass/claim', requireAuth, (_req, res) => res.json({ ok: true, claimed: false }));
 router.get('/chat/settings', requireAuth, (req, res) => res.json({ ok: true, mine: {}, theirs: {}, targetUid: s(req.query.targetUid, 128), policy: CHAT_POLICY }));

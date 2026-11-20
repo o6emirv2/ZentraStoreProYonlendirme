@@ -3,6 +3,7 @@ const { requireAuth } = require('./server-core-security.js');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const messages = require('./server-social-messageService.js');
+const gameInvites = require('./server-social-gameInviteService.js');
 const { shouldShowNotification, markNotificationShown } = require('./server-core-notificationService.js');
 
 const router = express.Router();
@@ -86,17 +87,7 @@ function runtimeNotifications(uid) {
       at: ticket.at
     }));
   }
-  for (const invite of runtimeStore.gameInvites.values()) {
-    if (!invite || invite.targetUid !== uid) continue;
-    items.push(normalizeNotification(invite, {
-      id: invite.id || invite.inviteId,
-      type: 'game-invite',
-      title: 'Oyun daveti',
-      message: `${invite.gameName || 'Oyun'} için davet aldın.`,
-      source: 'game-invite',
-      at: invite.at
-    }));
-  }
+
   return items;
 }
 
@@ -106,12 +97,14 @@ async function listNotifications(req, { includeDismissed = false } = {}) {
   const { db } = initFirebaseAdmin();
   const merged = new Map();
   const dmRows = db ? await messages.inbox(uid) : [];
+  const invited = db ? await gameInvites.inbox(uid) : [];
+  const inviteItems = invited.map(invite=>normalizeNotification({id:invite.inviteId, type:'game-invite',title:'Oyun daveti', message:`${invite.gameName||'Oyun'} için davet aldın.`,at:invite.at,source:'game-invite',data:{inviteId:invite.inviteId,gameKey:invite.gameKey,roomId:invite.roomId}}));
   const dmItems = dmRows.filter(row=>row.lastAt>0).map(row=>normalizeNotification({
     id:`dm_${row.peerUid}_${row.lastAt}`,
     type:'dm',title:'Yeni özel mesaj',message:row.lastMessage,
     at:row.lastAt,source:'social-center'
   }));
-  for (const item of [...await firestoreNotifications(db, uid, limit), ...runtimeNotifications(uid), ...dmItems]) {
+  for (const item of [...await firestoreNotifications(db, uid, limit), ...runtimeNotifications(uid), ...dmItems, ...inviteItems]) {
     if (item.id) merged.set(item.id, item);
   }
   const receipts = await readReceipts(db, uid, [...merged.keys()]);

@@ -1,6 +1,7 @@
 const rateLimit = require('express-rate-limit');
 const { initFirebaseAdmin } = require('./server-config-firebaseAdmin.js');
 const env = require('./server-config-env.js');
+const sessions = require('./server-core-sessionService.js');
 const { runtimeStore } = require('./server-core-runtimeStore.js');
 const apiLimiter = rateLimit({ windowMs: 60_000, max: 240, standardHeaders: true, legacyHeaders: false });
 const strictLimiter = rateLimit({ windowMs: 60_000, max: 30, standardHeaders: true, legacyHeaders: false });
@@ -28,16 +29,26 @@ async function requireAuth(req, res, next) {
     const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
     const { auth } = initFirebaseAdmin();
     if (auth && token) { req.user = await auth.verifyIdToken(token); return enforceModeration(req, res, next); }
-    const cookieToken = String(req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith('pm_session='));
-    const sessionToken = String(req.headers['x-session-token'] || req.headers['X-Session-Token'] || (cookieToken ? decodeURIComponent(cookieToken.slice('pm_session='.length)) : '') || '').trim();
+    const sessionToken = sessions.tokenFromRequest(req);
     if (sessionToken) {
-      const session = runtimeStore.temporary.get(`session:${sessionToken}`);
-      if (session?.uid) { req.user = { uid: String(session.uid), email: String(session.email || ''), sessionSource: String(session.sessionSource || 'runtime-session'), sessionId: String(session.sessionId || '') }; return enforceModeration(req, res, next); }
+      // Browser cookie sessions require an explicit same-origin write request.
+      // Token-authenticated API calls use their own header and are not subject to cookie CSRF.
+      const cookieOnly = !req.headers.authorization && !req.headers['x-session-token'];
+      if(cookieOnly && !['GET','HEAD','OPTIONS'].includes(req.method)) {
+        const origin=String(req.headers.origin||'');
+        const allowed=new Set([...env.allowedOrigins,env.publicBaseUrl,env.canonicalOrigin,env.publicBackendOrigin]);
+        if(!origin||!allowed.has(origin))return res.status(403).json({ok:false,error:'ORIGIN_NOT_ALLOWED'});
+      }
+      const session = await sessions.lookup(sessionToken);
+      if (session?.uid) {
+        req.user = { uid: session.uid, email: session.email, sessionSource: session.sessionSource, sessionId: session.sessionId };
+        return enforceModeration(req, res, next);
+      }
     }
     const devUid = req.headers['x-playmatrix-user'] || req.body?.uid || req.query?.uid;
     if (process.env.NODE_ENV === 'development' && process.env.ALLOW_DEV_AUTH === '1' && devUid) { req.user = { uid: String(devUid), email: 'local@playmatrix.test' }; return enforceModeration(req, res, next); }
     return res.status(401).json({ ok: false, error: 'AUTH_REQUIRED' });
-  } catch (error) { return res.status(401).json({ ok: false, error: 'AUTH_INVALID' }); }
+  } catch (error) { return res.status(error?.statusCode === 503 ? 503 : 401).json({ ok: false, error: error?.statusCode === 503 ? 'DATA_NOT_READY' : 'AUTH_INVALID' }); }
 }
 function requireAdmin(req, res, next) {
   const uid = req.user?.uid;
