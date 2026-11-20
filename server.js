@@ -18,7 +18,7 @@ const dataReadiness = require('./server-core-dataReadiness.js');
 const { addAdminLog, sanitizeRuntimeLogPayload } = require('./server-admin-adminRuntimeLogStore.js');
 
 process.on('unhandledRejection', (reason) => console.error('[process:unhandledRejection]', reason && reason.stack || reason));
-process.on('uncaughtException', (error) => console.error('[process:uncaughtException]', error && error.stack || error));
+process.on('uncaughtException', (error) => { console.error('[process:uncaughtException]', error && error.stack || error); process.exitCode = 1; server.close(() => process.exit(1)); setTimeout(() => process.exit(1), 5000).unref(); });
 
 const fb = firebase.initFirebaseAdmin();
 const app = express();
@@ -35,7 +35,7 @@ function resolveGameScopeFromPath(value = '') {
   const pathValue = String(value || '').toLowerCase();
   if (pathValue.includes('/chess') || pathValue.includes('/satranc') || pathValue.includes('/satranç')) return 'chess';
   if (pathValue.includes('/crash')) return 'crash';
-  if (pathValue.includes('/social') || pathValue.includes('/chat') || pathValue.includes('/friends') || pathValue.includes('/wheel') || pathValue.includes('/promo') || pathValue.includes('/bonus') || pathValue.includes('/support') || pathValue.includes('/profile') || pathValue.includes('/leaderboard') || pathValue.includes('/user-stats') || pathValue === '/' || pathValue.includes('/index.html')) return 'home';
+  if (pathValue.includes('/social') || pathValue.includes('/chat') || pathValue.includes('/friends') || pathValue.includes('/wheel') || pathValue.includes('/promo') || pathValue.includes('/bonus') || pathValue.includes('/support') || pathValue.includes('/profile') || pathValue.includes('/leaderboard') || pathValue === '/' || pathValue.includes('/index.html')) return 'home';
   return 'system';
 }
 function isExpectedClientOrApiStatus(statusCode = 0) {
@@ -50,7 +50,7 @@ function shouldRecordApiIssue(req, statusCode) {
   if (scope === 'crash' || scope === 'chess') return status >= 400;
   if (scope !== 'home') return false;
   if (isExpectedClientOrApiStatus(status)) return false;
-  return pathValue.includes('/api/social') || pathValue.includes('/api/chat') || pathValue.includes('/api/wheel') || pathValue.includes('/api/promo') || pathValue.includes('/api/support') || pathValue.includes('/api/leaderboard') || pathValue.includes('/api/user-stats');
+  return pathValue.includes('/api/social') || pathValue.includes('/api/chat') || pathValue.includes('/api/wheel') || pathValue.includes('/api/promo') || pathValue.includes('/api/support') || pathValue.includes('/api/leaderboard');
 }
 app.use((req, res, next) => {
   const startedAt = Date.now();
@@ -112,7 +112,6 @@ app.use('/api', protectAsyncRoutes(require('./server-routes-economy.routes.js'))
 app.use('/api', protectAsyncRoutes(require('./server-routes-notification.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-social.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-email.routes.js')));
-app.use('/api', protectAsyncRoutes(require('./server-routes-market.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-wheel.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-promo.routes.js')));
 app.use('/api', protectAsyncRoutes(require('./server-routes-support.routes.js')));
@@ -140,7 +139,7 @@ async function captureClientError(req, res) {
   const scope = String(payload.scope || payload.type || 'client.error');
   const status = Number(payload.status || 0) || 0;
   const expectedCodes = new Set(['STATE_VERSION_MISMATCH','ROOM_NOT_FOUND','ROOM_CLOSED','CASHOUT_NOT_AVAILABLE','CASHOUT_TOO_LATE','BET_ALREADY_LOST','BET_REFUNDED','REFUND_IN_PROGRESS','AUTO_CASHOUT_MISSED','AUTH_REQUIRED','UNAUTHENTICATED','USER_CANCELLED']);
-  const isHomeDataContractIssue = normalizedGame === 'home' && /undefined|schema|contract|policy|chat|socket|route|wheel|promo|support|frame|avatar|leaderboard|user-stats|notification|market|modal/i.test(`${message} ${scope} ${sourceText}`);
+  const isHomeDataContractIssue = normalizedGame === 'home' && /undefined|schema|contract|policy|chat|socket|route|wheel|promo|support|frame|avatar|leaderboard|notification|modal/i.test(`${message} ${scope} ${sourceText}`);
   const isHomeNetworkOrApiIssue = normalizedGame === 'home' && (/load failed|failed to fetch|networkerror|abort|timeout|500|internal/i.test(message) || status >= 500 || /api|fetch|legacy-home|script\.js/i.test(sourceText));
   if (!isHomeDataContractIssue && !isHomeNetworkOrApiIssue && (expectedCodes.has(code) || (status >= 400 && status < 500))) {
     return res.status(202).json({ ok:true, discarded:'expected-flow' });

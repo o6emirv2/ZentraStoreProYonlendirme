@@ -250,7 +250,7 @@ async function readCrashProfile(req) {
     console.error('[crash:profile:read:error]', JSON.stringify({ message: error.message }));
   }
   const balance = Number.isFinite(Number(profile.balance)) ? Math.max(0, Number(profile.balance) || 0) : await readBalance(uid);
-  const progression = getProgression(profile.accountXp ?? profile.xp ?? profile.accountLevelScore ?? 0);
+  const progression = getProgression(profile);
   return {
     uid,
     username: safeDisplayName({ ...req.user, ...profile }),
@@ -259,8 +259,6 @@ async function readCrashProfile(req) {
     photoURL: safeAvatarUrl(profile.photoURL || profile.avatar || profile.avatarUrl || ''),
     accountLevel: progression.accountLevel,
     level: progression.accountLevel,
-    accountXp: progression.currentXp,
-    xp: progression.currentXp,
     accountLevelProgressPct: progression.accountLevelProgressPct,
     progression,
     balance,

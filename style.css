@@ -1349,8 +1349,8 @@ body.pm-level-up-flash::after {
 }
 
 
-.home-stats-section{scroll-margin-top:96px}
-.home-stats-panel{padding:22px;display:grid;gap:18px;position:relative;overflow:hidden}
+
+
 .home-stats-panel::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(26rem 16rem at 0% 0%,rgba(0,212,255,.10),transparent 62%),radial-gradient(28rem 16rem at 100% 0%,rgba(255,45,125,.08),transparent 64%)}
 .home-stats-panel>*{position:relative;z-index:1}
 .home-widget-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
@@ -1359,7 +1359,7 @@ body.pm-level-up-flash::after {
 .home-widget-state{display:inline-flex;align-items:center;min-height:30px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--muted);font-size:.75rem;font-weight:800}
 .home-widget-state[data-widget-state="ready"]{color:#9af8c8;border-color:rgba(122,255,180,.22);background:rgba(122,255,180,.06)}
 .home-widget-state[data-widget-state="error"]{color:#ffb6c6;border-color:rgba(255,77,125,.22);background:rgba(255,77,125,.07)}
-.home-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+
 .home-stat-card{min-height:118px;padding:16px;border-radius:20px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.025));display:grid;align-content:space-between;gap:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
 .home-stat-card span{color:var(--muted);font-size:.78rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
 .home-stat-card strong{font-size:clamp(1.25rem,2.4vw,1.8rem);line-height:1;letter-spacing:-.05em;font-variant-numeric:tabular-nums}
@@ -3039,7 +3039,7 @@ a, button, [role="button"], .mobile-tab, .drop-item, .avatar-option, .game-cta, 
 
 .sheet-card, .sheet-hero-card, .profile-summary-card, .player-stats-panel, .lb-item, .game-card, .promo-stack--enhanced{min-width:0}
 
-.profile-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
+
 
 .profile-stat-card{min-width:0;padding:12px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
 
@@ -3047,7 +3047,7 @@ a, button, [role="button"], .mobile-tab, .drop-item, .avatar-option, .game-cta, 
 
 .profile-stat-card strong{display:block;color:var(--text);font-size:.98rem;font-weight:900;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-.profile-stats-updated{margin-top:8px;color:var(--muted);font-size:.76rem;line-height:1.4}
+
 
 .lb-item .pm-avatar{flex:0 0 auto}
 
@@ -3350,7 +3350,7 @@ img, video, canvas, svg {
   .field-grid, .support-grid{grid-template-columns:1fr!important}
   .sheet-actions{display:grid;grid-template-columns:1fr!important}
   .sheet-actions>*{width:100%;min-width:0}
-  .profile-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  
   .wheel-wrap{width:min(280px,calc(100vw - 72px));height:min(280px,calc(100vw - 72px));min-width:0;min-height:0;flex-basis:auto}
   .ps-modal{align-items:flex-end;padding:8px}
   .ps-modal-content{width:100%;max-height:calc(var(--app-height,100vh) - 16px);border-radius:22px 22px 0 0}
@@ -3361,7 +3361,7 @@ img, video, canvas, svg {
 }
 
 @media (max-width:520px){
-  .profile-stats-grid{grid-template-columns:1fr}
+  
   .profile-stat-card{padding:11px 12px}
   .lb-item{grid-template-columns:28px 44px minmax(0,1fr) minmax(66px,auto)}
   .lb-score-box{min-width:64px}
@@ -3380,8 +3380,8 @@ img, video, canvas, svg {
   }
 }
 
-@media (max-width: 920px){.home-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width: 560px){.home-stats-grid{grid-template-columns:1fr}.home-widget-head{align-items:stretch}.home-widget-state{justify-content:center;width:100%}}
+@media (max-width: 920px){}
+@media (max-width: 560px){.home-widget-head{align-items:stretch}.home-widget-state{justify-content:center;width:100%}}
 
 
 /* Avatar-only presentation: legacy decorative frame rules removed. */
@@ -4455,10 +4455,10 @@ button, a, input, textarea, select, [role="button"], .game-card, .nav-item { tou
 .drop-item i { width: 22px; text-align: center; color: rgba(251, 191, 36, .92); font-size: 1rem; }
 .drop-item:hover, .drop-item:focus-visible { background: rgba(255,255,255,.075); color: #fff; outline: none; transform: translateX(2px); }
 .drop-item.danger i { color: #fb7185; }
-.market-items { display: grid; gap: 12px; }
-.market-item-card { display:flex; align-items:center; justify-content:space-between; gap: 12px; padding: 14px; border-radius: 18px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09); }
-.market-item-title { color: #fff; font-weight: 850; }
-.market-item-meta { color: #fbbf24; font-weight: 900; }
+
+
+
+
 .skeleton-line { height: 48px; border-radius: 16px; background: linear-gradient(90deg, rgba(255,255,255,.05), rgba(255,255,255,.1), rgba(255,255,255,.05)); background-size: 220% 100%; animation: pmSkeleton 1.2s ease-in-out infinite; }
 @keyframes pmSkeleton { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 .ps-modal { display: flex; opacity: 0; visibility: hidden; pointer-events: none; align-items: flex-end; justify-content: center; padding: 0 12px max(12px, env(safe-area-inset-bottom)); background: rgba(3, 7, 16, .78); transition: opacity .2s ease, visibility 0s linear .2s; }
@@ -4501,7 +4501,7 @@ body.modal-open, body.sheet-open { overflow: hidden; }
   .chip-balance { min-width: 72px; }
 }
 
-/* PlayMatrix Home production repair: mobile-safe sheet, profile dropdown, frame picker and market states. */
+/* PlayMatrix Home production repair: mobile-safe sheet, profile dropdown, profile interaction states. */
 :root {
   --pm-home-sheet-gap: 12px;
   --pm-home-panel-bg: rgba(12, 18, 33, .96);
@@ -4509,25 +4509,9 @@ body.modal-open, body.sheet-open { overflow: hidden; }
   --pm-home-soft-text: rgba(236, 242, 255, .72);
 }
 
-.market-disabled-card {
-  display: grid;
-  gap: 8px;
-  padding: 18px 20px;
-  border-radius: 22px;
-  border: 1px solid rgba(255,255,255,.12);
-  background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.035));
-  color: #f8fafc;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 18px 42px rgba(0,0,0,.24);
-}
-.market-disabled-card strong {
-  font-size: 1rem;
-  font-weight: 900;
-  letter-spacing: -.01em;
-}
-.market-disabled-card span {
-  color: var(--pm-home-soft-text);
-  line-height: 1.5;
-}
+
+
+
 
 
 
@@ -4881,3 +4865,47 @@ body[data-pm-page="home"] .hero-main.fade-up:not(.visible){opacity:1!important;v
 
 /* Mobile image art direction: use portrait crop of the supplied photo, not the embedded desktop wording. */
 @media (max-width:700px){body[data-pm-page="home"] .pm-promo-gallery .pm-promo-picture{object-position:center!important;}body[data-pm-page="home"] .pm-promo-gallery .pm-promo-mobile {z-index:3;}body[data-pm-page="home"] .pm-promo-gallery .pm-image-slide::after{z-index:2;inset:36% 0 0;background:linear-gradient(to bottom,transparent,rgba(4,9,27,.66) 40%,rgba(3,7,22,.93) 100%);}body[data-pm-page="home"] .pm-slide-action{z-index:4;}}
+
+/* PlayMatrix MC rebuild: image-only banners, native aspect ratio, responsive game catalog. */
+body[data-pm-page="home"] .pm-promo-gallery .pm-image-slide {
+  height:auto!important; min-height:0!important; aspect-ratio:auto!important;
+  padding:0!important; overflow:hidden; display:block; position:relative;
+}
+body[data-pm-page="home"] .pm-promo-gallery .pm-image-slide picture {
+  display:block!important; position:relative!important; inset:auto!important; width:100%;height:auto!important;
+}
+body[data-pm-page="home"] .pm-promo-gallery .pm-image-slide img.pm-promo-picture {
+  display:block!important; width:100%!important;height:auto!important;max-width:100%;
+  object-fit:contain!important;object-position:center!important;aspect-ratio:auto!important;
+}
+body[data-pm-page="home"] .pm-promo-gallery .pm-image-slide::after,
+body[data-pm-page="home"] .pm-promo-gallery .pm-image-slide::before,
+body[data-pm-page="home"] .pm-promo-gallery .pm-promo-mobile,
+body[data-pm-page="home"] .pm-promo-gallery .pm-slide-action {display:none!important;content:none!important;}
+body[data-pm-page="home"] .pm-promo-gallery .hero-slider-viewport { padding:0!important; margin:0!important; }
+body[data-pm-page="home"] .pm-promo-gallery .hero-slider-track {gap:0!important;align-items:flex-start;}
+body[data-pm-page="home"] .pm-promo-gallery .hero-slider-shell {min-height:0!important;}
+body[data-pm-page="home"] .games-grid {
+  display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;
+  gap:clamp(12px,1.4vw,20px);align-items:stretch;
+}
+body[data-pm-page="home"] .games-grid>.game-card {grid-column:auto!important;min-width:0;transition:transform .25s ease,border-color .25s ease,box-shadow .25s ease;}
+body[data-pm-page="home"] .games-grid>.game-card:focus-within {border-color:#8ad6ff;box-shadow:0 0 0 2px rgba(138,214,255,.22);}
+.wheel-odds-disclosure {font-size:.78rem;line-height:1.5;text-align:center;max-width:34rem;margin:8px auto;color:#aebdd7;}
+@media (max-width:700px) {
+  body[data-pm-page="home"] .games-grid {grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important;}
+  body[data-pm-page="home"] .games-grid>.game-card {min-width:0!important;padding:10px!important;}
+  body[data-pm-page="home"] .game-card .game-cta {min-height:44px;}
+  body[data-pm-page="home"] .pm-promo-gallery .pm-image-slide {aspect-ratio:auto!important;}
+}
+@media (prefers-reduced-motion:reduce) {
+  body[data-pm-page="home"] .games-grid>.game-card {animation:none!important;transition:none!important;transform:none!important;}
+}
+
+/* Mobile 2×2 game page. Other games remain accessible. */
+.pm-games-more{display:none;min-height:44px;margin:16px auto 0;}
+@media(max-width:700px){
+ body[data-pm-page="home"] .games-grid:not([data-mobile-expanded="1"])>.game-card:nth-child(n+5){display:none!important;}
+ body[data-pm-page="home"] .pm-games-more:not([hidden]){display:block;}
+}
+@media(min-width:701px){body[data-pm-page="home"] .pm-games-more{display:none!important;}}

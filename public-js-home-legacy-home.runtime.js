@@ -1,4 +1,4 @@
-import { loadFirebaseWebConfig } from "/public-firebase-runtime.js"; import { AVATARS, AVATAR_CATEGORIES, DEFAULT_AVATAR, AVATAR_FALLBACK, normalizeAvatarUrl, isCatalogAvatarUrl } from "/public-data-avatar-catalog.js"; import { createAvatarPicker } from "/public-js-profile-avatar-picker.js"; import { ACCOUNT_PROGRESSION_VERSION, ACCOUNT_LEVEL_CURVE_MODE, normalizeAccountXpExact, getAccountLevelFromXp, getAccountLevelProgressFromXp } from "/public-data-progression-policy.js";
+import { loadFirebaseWebConfig } from "/public-firebase-runtime.js"; import { AVATARS, AVATAR_CATEGORIES, DEFAULT_AVATAR, AVATAR_FALLBACK, normalizeAvatarUrl, isCatalogAvatarUrl } from "/public-data-avatar-catalog.js"; import { createAvatarPicker } from "/public-js-profile-avatar-picker.js"; import { ACCOUNT_PROGRESSION_VERSION, ACCOUNT_LEVEL_CURVE_MODE, getAccountLevelProgress } from "/public-data-progression-policy.js";
  let initializeApp = null; let firebaseGetAuth = null; let firebaseOnAuthStateChanged = null; let firebaseSignOut = null;
 let firebaseSignInWithEmailAndPassword = null; let firebaseCreateUserWithEmailAndPassword = null; let firebaseSendEmailVerification = null; let firebaseSendPasswordResetEmail = null; let firebaseVerifyBeforeUpdateEmail = null;
 let firebaseGetIdToken = null; let firebaseReload = null;      const $ = (id) => document.getElementById(id);     const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
@@ -50,8 +50,11 @@ async function bootFirebase() {
      function onAuthStateChanged(_authInstance, callback, errorCallback, completedCallback) {       let nativeUnsubscribe = null;       let active = true;       let nativeAttached = false;
        const emitGuestState = () => {         if (!active || nativeAttached) return;         try {           callback(null);
         } catch (error) {           if (typeof errorCallback === 'function') errorCallback(error);           else console.error('[PlayMatrix] auth shim callback', error);         }         if (typeof completedCallback === 'function') completedCallback();
-      };       bootFirebase().then((ready) => {         if (!active) return;         if (!ready || !firebaseReady || typeof firebaseOnAuthStateChanged !== 'function') {           emitGuestState();           return;         }
-        nativeAttached = true;         nativeUnsubscribe = firebaseOnAuthStateChanged(auth, callback, errorCallback, completedCallback);       }).catch((error) => {         firebaseBootError = error instanceof Error ? error : new Error(String(error || 'FIREBASE_BOOT_FAILED'));         emitGuestState();       });
+      };       bootFirebase().then((ready) => {         if (!active) return;         if (!ready || !firebaseReady || typeof firebaseOnAuthStateChanged !== 'function') {
+          if (typeof errorCallback === 'function') errorCallback(firebaseBootError || new Error('AUTH_NOT_READY'));
+          return;
+        }
+        nativeAttached = true;         nativeUnsubscribe = firebaseOnAuthStateChanged(auth, callback, errorCallback, completedCallback);       }).catch((error) => {         firebaseBootError = error instanceof Error ? error : new Error(String(error || 'FIREBASE_BOOT_FAILED'));         if (typeof errorCallback === 'function') errorCallback(error);       });
        return () => {         active = false;         if (typeof nativeUnsubscribe === 'function') nativeUnsubscribe();       };
     }      async function signOut(authInstance) {       await bootFirebase();       if (!firebaseReady) return;
       return firebaseSignOut(authInstance || auth);     }      async function signInWithEmailAndPassword(authInstance, email, password) {       await waitForFirebaseReady('Giriş');
@@ -83,10 +86,15 @@ async function bootFirebase() {
           lastNetworkError = error;           if (index >= orderedBases.length - 1) throw error;         }       } 
       if (lastNetworkError) throw lastNetworkError;       throw new Error('Bağlantı sağlanamadı. İnternet bağlantını kontrol edip yeniden dene.');     }      const REF_STORAGE_KEY = "pm_pending_referral_code";
      const REWARDS = [
-      { label:"10.000 MC", val:10000, color:"rgba(255,255,255,0.14)" },       { label:"20.000 MC", val:20000, color:"rgba(255,255,255,0.09)" },       { label:"25.000 MC", val:25000, color:"rgba(255,255,255,0.14)" },
-      { label:"45.000 MC", val:45000, color:"rgba(255,255,255,0.09)" },       { label:"65.000 MC", val:65000, color:"rgba(255,255,255,0.14)" },       { label:"90.000 MC", val:90000, color:"rgba(255,255,255,0.09)" },
-      { label:"120.000 MC", val:120000, color:"rgba(255,255,255,0.14)" },       { label:"1.000.000 MC", val:1000000, color:"rgba(255,255,255,0.09)" }
-    ];        const GAMES = [
+  {label:'100 MC',val:100,color:'rgba(255,255,255,.14)'},
+  {label:'500 MC',val:500,color:'rgba(255,255,255,.09)'},
+  {label:'1.500 MC',val:1500,color:'rgba(255,255,255,.14)'},
+  {label:'2.500 MC',val:2500,color:'rgba(255,255,255,.09)'},
+  {label:'5.000 MC',val:5000,color:'rgba(255,255,255,.14)'},
+  {label:'15.000 MC',val:15000,color:'rgba(255,255,255,.09)'},
+  {label:'30.000 MC',val:30000,color:'rgba(255,255,255,.14)'},
+  {label:'50.000 MC',val:50000,color:'rgba(255,255,255,.09)'}
+];        const GAMES = [
       {         name: "Crash",         category: "online",         access: "auth",         url: "/games-crash-index.html",
         color: "69,162,255",         icon: "fa-arrow-trend-up",         desc: "Gerçek para içermeyen, refleks ve zamanlama odaklı hızlı tempo multiplier oyunu.",         tags: ["Canlı Oyun", "Rekabet", "Hızlı Tur"],         keywords: "crash multiplier online rocket roket çarpan"
       },       {         name: "Satranç",         category: "online",         access: "auth",
@@ -165,8 +173,7 @@ async function bootFirebase() {
       stopActivityHeartbeat();       disconnectRealtime({ preserveIntent: false });       state.authReady = false;       if (!options.silent) notifySessionIssueOnce("Oturum kapatıldı", reasonMessage, "warning");       closeSheet();
       setTimeout(() => { window.location.hash = "#hero"; }, 50);       state.logoutInFlight = false;       return false;     } 
     async function sendActivityHeartbeat(reason = "active"){       if (!auth.currentUser || !state.authReady) return false;       try {         await fetchPrivate("/api/me/activity/heartbeat", "POST", {           activity: String(reason || "heartbeat").trim() || "heartbeat",
-          interactive: ["input", "focus", "visible", "pageshow", "login", "boot", "click", "pointerdown", "mousemove", "keydown", "touchstart"].some((token) => String(reason || "").toLowerCase().includes(token))         });         return true;       } catch (error) {         const message = String(error?.message || "");
-        if (message.includes("Oturum") || message.includes("zaman aşım") || message.includes("Geçersiz token") || message.includes("Geçersiz oturum")) {           await forceSecureLogout("Güvenlik nedeniyle oturumun kapatıldı. Tekrar giriş yapman gerekiyor.");           return false;         }         return false;
+          interactive: ["input", "focus", "visible", "pageshow", "login", "boot", "click", "pointerdown", "mousemove", "keydown", "touchstart"].some((token) => String(reason || "").toLowerCase().includes(token))         });         return true;       } catch (error) {         reportClientError('activity.heartbeat', error);         return false;
       }     }      function stopActivityHeartbeat(){       if (activityHeartbeatTimer) {
         window.clearInterval(activityHeartbeatTimer);         activityHeartbeatTimer = 0;       }     } 
     function startActivityHeartbeat(){       stopActivityHeartbeat();       if (!auth.currentUser || !state.authReady) return;       if (window.__PM_RUNTIME_SHARED_HEARTBEAT__) return;       sendActivityHeartbeat("boot").catch(() => null);
@@ -174,16 +181,27 @@ async function bootFirebase() {
         activityHeartbeatListenersBound = true;         ["visibilitychange", "focus", "pageshow"].forEach((eventName) => {           window.addEventListener(eventName, () => {             if (!auth.currentUser) return;             sendActivityHeartbeat(eventName).catch(() => null);
           }, { passive: true });         });          ["pointerdown", "keydown", "touchstart"].forEach((eventName) => {           window.addEventListener(eventName, () => {
             if (!auth.currentUser) return;             sendActivityHeartbeat(eventName).catch(() => null);           }, { passive: true });         });       }
-    }            function normalizeAccountLevel(level = 0){       return Math.max(0, Math.min(100, Math.round(Number(level) || 0)));     }
-     function getProgressionData(userData = {}) {       return userData?.progression && typeof userData.progression === 'object' ? userData.progression : {};     } 
-    function isCurrentAccountProgression(userData = {}) {       const progression = getProgressionData(userData);       const version = String(userData?.accountProgressionVersion ?? progression.accountProgressionVersion ?? progression.version ?? '').trim();       const curveMode = String(userData?.accountLevelCurveMode ?? progression.accountLevelCurveMode ?? progression.curveMode ?? '').trim();       return (version === ACCOUNT_PROGRESSION_VERSION || version === 'playmatrix-progression-v1') && (!curveMode || curveMode === ACCOUNT_LEVEL_CURVE_MODE);
-    }      function getUserAccountXpExact(userData = {}) {       const progression = getProgressionData(userData);       const candidates = [progression.xp, progression.accountXpExact, userData?.accountXpExact, userData?.accountLevelScoreExact, progression.accountLevelScoreExact, userData?.accountXp, userData?.accountLevelScore, progression.accountXp, userData?.xp];       const raw = candidates.find((value) => value !== undefined && value !== null && String(value).trim() !== "");       return normalizeAccountXpExact(raw || 0);     }      function getUserAccountXp(userData = {}) {       const serverProgression = getProgressionData(userData);       const serverXp = serverProgression.xp ?? serverProgression.accountXp ?? userData?.accountXp ?? userData?.xp;       return getAccountLevelProgressFromXp(serverXp ?? getUserAccountXpExact(userData)).accountXp;     }      function getUserLevel(userData) {       const progression = getProgressionData(userData);       const explicit = Number(progression.level ?? progression.accountLevel ?? userData?.accountLevel ?? userData?.level);       if (Number.isFinite(explicit) && explicit > 0) return normalizeAccountLevel(explicit);       return normalizeAccountLevel(getAccountLevelFromXp(getUserAccountXpExact(userData)));     } 
-    function normalizeApiUser(userData = {}) {       const base = userData && typeof userData === 'object' ? { ...userData } : {};       const serverProgression = getProgressionData(base);       const serverIsCurrent = isCurrentAccountProgression(base);       const accountXpExact = getUserAccountXpExact(base);       const clientProgression = getAccountLevelProgressFromXp(accountXpExact);       const accountXp = clientProgression.accountXp;       const accountLevel = getUserLevel(base);       const progressPercent = clamp(Number(serverProgression.progressPercent ?? serverProgression.accountLevelProgressPct ?? clientProgression.accountLevelProgressPct ?? 0), 0, 100);       const monthlyActivity = Math.max(0, Number(base.monthlyActiveScore ?? serverProgression.monthlyActivity ?? 0) || 0);       
-                    const progression = {         ...clientProgression,         ...serverProgression,         accountXp,         accountXpExact: serverProgression.xp ? normalizeAccountXpExact(serverProgression.xp) : clientProgression.accountXpExact,         xp: serverProgression.xp ?? clientProgression.accountXpExact,         accountLevel,         level: accountLevel,         accountLevelScore: accountXp,         accountLevelProgressPct: progressPercent,         progressPercent,         monthlyActivity,
-        accountProgressionVersion: ACCOUNT_PROGRESSION_VERSION,         accountLevelCurveMode: ACCOUNT_LEVEL_CURVE_MODE,         version: ACCOUNT_PROGRESSION_VERSION,         curveMode: ACCOUNT_LEVEL_CURVE_MODE,         source: serverIsCurrent ? 'backend' : 'frontend-safe-fallback'       };       return {         ...base,
-        accountXp,         accountXpExact: progression.accountXpExact,         xp: progression.xp ?? progression.accountXpExact,         accountLevel,         level: accountLevel,         accountLevelScore: accountXp,         progressPercent,         accountLevelProgressPct: progressPercent,         accountXpLabel: progression.accountXpLabel || progression.formattedXp || clientProgression.accountXpLabel,         accountXpFullLabel: progression.accountXpFullLabel || progression.formattedXp || clientProgression.accountXpFullLabel,
-        accountProgressionVersion: ACCOUNT_PROGRESSION_VERSION,         accountLevelCurveMode: ACCOUNT_LEVEL_CURVE_MODE,         monthlyActiveScore: monthlyActivity,                  progression
-      };     }      function normalizeMemberPayload(member = {}) {       const normalized = normalizeApiUser(member);
+    }            function normalizeAccountLevel(level = 1) {
+  const n = Number(level);
+  return Number.isFinite(n) ? Math.max(1, Math.min(100, Math.floor(n))) : 1;
+}
+function getProgressionData(userData = {}) {
+  return userData?.progression && typeof userData.progression === 'object' ? userData.progression : {};
+}
+function getUserLevel(userData = {}) {
+  return getAccountLevelProgress(userData).accountLevel;
+}
+function normalizeApiUser(userData = {}) {
+  const base = userData && typeof userData === 'object' ? {...userData} : {};
+  const progress = getAccountLevelProgress(base);
+  const monthlyActivity = Math.max(0, Number(base.monthlyActiveScore || 0) || 0);
+  return {...base,accountLevel:progress.accountLevel,level:progress.accountLevel,
+    accountLevelProgressPct:progress.accountLevelProgressPct,progressPercent:progress.progressPercent,
+    accountProgressionVersion:ACCOUNT_PROGRESSION_VERSION,
+    accountLevelCurveMode:ACCOUNT_LEVEL_CURVE_MODE,monthlyActiveScore:monthlyActivity,
+    progression:{...getProgressionData(base),...progress}};
+}
+function normalizeMemberPayload(member = {}) {       const normalized = normalizeApiUser(member);
       const presence = normalizePresenceState(normalized.presence, !!normalized.online);       const leaderboard = normalized.leaderboard && typeof normalized.leaderboard === 'object' ? {         rank: Math.max(0, Number(normalized.leaderboard.rank) || 0),         metricKey: String(normalized.leaderboard.metricKey || '').trim(),         metricLabel: String(normalized.leaderboard.metricLabel || '').trim(),
         metricValue: Number(normalized.leaderboard.metricValue || 0) || 0       } : null;       return {         ...normalized,         username: String(normalized.username || normalized.displayName || 'Oyuncu').trim() || 'Oyuncu',
         avatar: typeof normalized.avatar === 'string' ? normalized.avatar : '',                  presence,         online: presence.online,         unreadMessages: Math.max(0, Number(normalized.unreadMessages || 0) || 0),
@@ -250,7 +268,7 @@ function getSocialRankMeta(){ return { name: "SEVİYE", className: "rank-level" 
             const recoveredToken = await getIdToken(auth.currentUser, true).catch(() => "");             if (recoveredToken) {               requestOptions.headers.Authorization = `Bearer ${recoveredToken}`;               response = await requestWithApiFallback(endpoint, { ...requestOptions, cache: "no-store" });             }
           }         }       } catch {         throw new Error('Bağlantı sağlanamadı. İnternet bağlantını kontrol edip yeniden dene.');       }
        const contentType = response.headers.get("content-type") || "";       let payload = null;        if (!response.ok) {
-        if (contentType.includes("application/json")) {           try { payload = await response.json(); } catch(_) {}           if (response.status === 401 && payload?.redirect) {             await forceSecureLogout(payload.error || "Oturum süren doldu.", { silent: true });             throw new Error(payload.error || "Oturum süresi doldu.");
+        if (contentType.includes("application/json")) {           try { payload = await response.json(); } catch(_) {}           if (response.status === 401 && payload?.redirect) {             throw new Error("Oturum doğrulanamadı. Lütfen yeniden giriş yapın.");
           }           throw new Error((payload && (payload.error || payload.message)) || `Sunucu hatası. (${response.status})`);         }         if (response.status === 401) {           await forceSecureLogout("Oturum süren doldu.", { silent: true });
           throw new Error("Oturum süresi doldu.");         }         throw new Error(`Sunucu hatası. (${response.status})`);       } 
       if (contentType.includes("application/json")) {         payload = await response.json();         if (payload && payload.ok === false) throw new Error(payload.error || payload.message || "İşlem başarısız.");         return payload;       }
@@ -560,10 +578,10 @@ function buildMessageBubble(item, isSelf = false, context = "dm") {   const card
   const shell = document.createElement("div");   shell.className = "ps-chat-shell";    const targetUid = item.fromUid || item.senderUid || item.uid || item.targetUid || "";   const frameLevel = isSelf ? 0 : 0;
   const avatarUrl = isSelf     ? safeUrl(state.selectedAvatar || state.userData?.avatar || AVATARS[0])     : safeUrl(item.avatar || AVATARS[0]);    const avatar = createAvatarShellNode(
     avatarUrl,     frameLevel,     38,     "ps-chat-avatar-shell pm-avatar--chat"   );
-  avatar.classList.add("ps-chat-avatar");   if (targetUid) {     avatar.style.cursor = "pointer";     avatar.title = "Profili aç";     avatar.addEventListener("click", () => window.showPlayerStats?.(targetUid));
+  avatar.classList.add("ps-chat-avatar");   if (targetUid) {     avatar.style.cursor = "pointer";     avatar.title = "Profili aç";
   }    const main = document.createElement("div");   main.className = "ps-chat-main"; 
   const topLine = document.createElement("div");   topLine.className = "ps-chat-topline";    const name = document.createElement("strong");   name.className = "ps-chat-name";
-  name.textContent = isSelf ? "Sen" : (item.username || "Oyuncu");   if (targetUid) {     name.style.cursor = "pointer";     name.title = "Profili aç";     name.addEventListener("click", () => window.showPlayerStats?.(targetUid));
+  name.textContent = isSelf ? "Sen" : (item.username || "Oyuncu");   if (targetUid) {     name.style.cursor = "pointer";     name.title = "Profili aç";
   }   topLine.appendChild(name);     const body = document.createElement("div");
   body.className = "ps-chat-text";   if (item?.deletedAt) body.classList.add('is-retention');   body.textContent = item.deletedAt ? describeMessageLifecycle(item) || "Bu mesaj silindi." : (item.message || item.text || "");    const bottom = document.createElement("div");
   bottom.className = "ps-chat-bottom";    const time = document.createElement("span");   time.className = "ps-chat-time";   time.textContent = formatClockTime(item.createdAt);
@@ -888,7 +906,7 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
           pulse("triangle", 560, now, 0.06, 0.45);           pulse("sine", 760, now + 0.07, 0.08, 0.34);           return;         }         if (kind === "pop") {
           pulse("triangle", 520, now, 0.06, 0.42);           return;         }         pulse("sine", 420, now, 0.05, 0.32);       } catch(_) {}
     }      function updateSoundUI(){       $("soundIcon").className = `fa-solid ${state.soundEnabled ? "fa-volume-high" : "fa-volume-xmark"}`;     }
-     const COMPACT_SHEETS = new Set(["auth", "forgot", "wheel", "promo", "market"]);      function openSheet(name, title, subtitle){       state.currentSheet = name;
+     const COMPACT_SHEETS = new Set(["auth", "forgot", "wheel", "promo"]);      function openSheet(name, title, subtitle){       state.currentSheet = name;
       const sheetShell = $("sheetShell");       sheetShell.classList.add("is-open");       sheetShell.classList.toggle("is-social", name === "social");       sheetShell.classList.toggle("is-compact", COMPACT_SHEETS.has(name));       sheetShell.setAttribute("aria-hidden", "false");
       document.body.classList.add("sheet-open");       $("sheetTitle").textContent = title;       $("sheetSubtitle").textContent = subtitle;       document.querySelectorAll(".sheet-section").forEach((section) => section.classList.toggle("is-active", section.dataset.sheet === name));       $("sheetPanel").style.transform = "";
       playSound("pop");     }      window.openPlayMatrixSheet = openSheet;      function closeSheet(){       $("sheetShell").classList.remove("is-open", "is-social", "is-compact");
@@ -901,7 +919,7 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
       refreshProfileSheet();       openSheet("profile", "Profil Yönetimi", "Avatar, Kullanıcı Adı Ve Hesap İşlemleri.");     }      function openWheelSheet(){
       if (!ensureAuthThen("Günlük çark")) return;       drawWheel();       refreshWheelUI();       openSheet("wheel", "Günlük Çark", "E-posta doğrulaması tamamlandıktan sonra her 24 saatte bir ücretsiz spin yapılabilir.");     }
      function openPromoSheet(){       if (!ensureAuthThen("Promosyon kodu")) return;       $("promoHelp").textContent = "";       $("promoHelp").className = "field-help";
-      openSheet("promo", "Ödül Merkezi", "Promosyon kodunu gir, ödülünü güvenli şekilde aktif et.");     }      function openMarketSheet(){       if (!ensureAuthThen("Market")) return;       openSheet("market", "Market", "Market alanı geçici olarak kapalıdır. Ürünler stoklandığında ve sistem aktif edildiğinde MC ile kullanılabilir olacaktır.");       loadMarketItems();     }      async function loadMarketItems(){       const box = $("marketItems");       if (!box) return;       box.innerHTML = '<div class="market-disabled-card"><strong>Market geçici olarak kapalıdır</strong><span>Ürünler stoklandığında ve sistem aktif edildiğinde MC ile kullanılabilir olacaktır.</span></div>';     }      function openSupportSheet(){       if (!ensureAuthThen("Destek talebi")) return;
+      openSheet("promo", "Ödül Merkezi", "Promosyon kodunu gir, ödülünü güvenli şekilde aktif et.");     }      function openSupportSheet(){       if (!ensureAuthThen("Destek talebi")) return;
       $("supportHelp").textContent = "";       $("supportHelp").className = "field-help";       openSheet("support", "Canlı Destek", "Sorununu detaylı biçimde ilet, destek kaydın eksiksiz oluşturulsun.");     } 
     function getIstanbulActivityContext() {       const formatter = new Intl.DateTimeFormat('tr-TR', {         timeZone: 'Europe/Istanbul',         year: 'numeric',         month: 'numeric'
       });       const parts = formatter.formatToParts(new Date());       const values = Object.create(null);       for (const part of parts) {         if (part.type !== 'literal') values[part.type] = part.value;
@@ -930,72 +948,7 @@ function renderMessageStack(stream, messages, emptyTitle, emptyMessage, getIsSel
       };
     }
 
-    function setHomeWidgetStatus(id, stateName, message) {
-      const status = $(id);
-      const normalized = String(stateName || "idle");
-      if (window.PMHomeWidgetContract?.setWidgetState) window.PMHomeWidgetContract.setWidgetState(status, normalized, message || "");
-      else if (status) { status.dataset.widgetState = normalized; status.textContent = message || ""; }
-      return status;
-    }
-
-    function buildHomeStatsModel(data = {}) {
-      const normalized = normalizeApiUser(data || {});
-      const progression = getProgressionData(normalized);
-      const stats = normalized.statistics && typeof normalized.statistics === "object" ? normalized.statistics : {};
-      const leaderboardLevelItems = Array.isArray(currentLeaderboardData?.tabs?.level?.items) ? currentLeaderboardData.tabs.level.items.length : 0;
-      const leaderboardActivityItems = Array.isArray(currentLeaderboardData?.tabs?.activity?.items) ? currentLeaderboardData.tabs.activity.items.length : 0;
-      const monthlyActivity = Number(normalized.monthlyActiveScore ?? stats.monthlyActiveScore ?? progression.monthlyActivity ?? 0) || 0;
-      const totalRounds = Number(normalized.totalRounds ?? stats.totalRounds ?? 0) || 0;
-      const totalWins = Number(normalized.totalWins ?? stats.totalWins ?? normalized.matchWins ?? normalized.chessWins ?? 0) || 0;
-      const winRate = Number(normalized.winRatePct ?? stats.winRatePct ?? stats.winRate ?? 0) || 0;
-      return [
-        { key: "level", label: "Hesap Seviyesi", value: String(getUserLevel(normalized)), hint: "Tek progression modelinden" },
-        { key: "balance", label: "Bakiye", value: `${formatNumber(Number(normalized.balance || stats.balance || 0) || 0)} MC`, hint: "Canlı hesap bakiyesi" },
-        { key: "activity", label: "Aylık Aktiflik", value: formatNumber(monthlyActivity), hint: "Aylık oyun katılımı" },
-        { key: "rounds", label: "Toplam Oyun", value: formatNumber(totalRounds), hint: `${formatNumber(totalWins)} galibiyet · %${Number(winRate).toFixed(1)} başarı` },
-        { key: "leaderboard", label: "Liderlik Verisi", value: formatNumber(leaderboardLevelItems + leaderboardActivityItems), hint: "Seviye + aktiflik listesi" },
-        { key: "xp", label: "Hesap XP", value: formatNumber(getUserAccountXp(normalized)), hint: "v7 seviye eğrisi" }
-      ];
-    }
-
-    function renderHomeStats(data = state.userData, options = {}) {
-      const grid = $("homeStatsGrid");
-      if (!grid) return;
-      const statusText = $("homeStatsStatus");
-      const isLoading = options.state === "loading";
-      grid.setAttribute("aria-busy", isLoading ? "true" : "false");
-      grid.classList.toggle("is-loading", isLoading);
-      if (isLoading) {
-        const fragment = document.createDocumentFragment();
-        Array.from({ length: 4 }).forEach(() => {
-          const card = document.createElement("article");
-          card.className = "home-stat-card is-skeleton";
-          card.append(createTextElement("span", "", ""), createTextElement("strong", "", ""), createTextElement("small", "", ""));
-          fragment.appendChild(card);
-        });
-        grid.replaceChildren(fragment);
-        setHomeWidgetStatus("homeStatsStatus", "loading", "Veriler hazırlanıyor");
-        return;
-      }
-      const model = buildHomeStatsModel(data || {});
-      if (!model.length) {
-        grid.replaceChildren(createTextElement("div", "home-widget-empty", "İstatistik verisi bulunamadı."));
-        setHomeWidgetStatus("homeStatsStatus", "empty", "Veri yok");
-        return;
-      }
-      const fragment = document.createDocumentFragment();
-      model.forEach((item) => {
-        const card = document.createElement("article");
-        card.className = "home-stat-card";
-        card.dataset.statKey = item.key;
-        card.append(createTextElement("span", "", item.label), createTextElement("strong", "", item.value), createTextElement("small", "", item.hint));
-        fragment.appendChild(card);
-      });
-      grid.replaceChildren(fragment);
-      setHomeWidgetStatus("homeStatsStatus", "ready", auth.currentUser ? "Canlı hesap verisi" : "Misafir görünümü");
-      if (statusText) statusText.title = options.updatedLabel || composeHomepageOverviewModel(data || {}).statsUpdatedLabel;
-    }
-function stopHeroCarouselAutoplay() {       if (heroCarouselState.timer) {
+    function stopHeroCarouselAutoplay() {       if (heroCarouselState.timer) {
         clearTimeout(heroCarouselState.timer);         heroCarouselState.timer = 0;       }     } 
     function scheduleHeroCarouselAutoplay() {       stopHeroCarouselAutoplay();       if (document.hidden) return;       if ((heroCarouselState.slides || []).length <= 1) return;       if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;       heroCarouselState.timer = window.setTimeout(() => {
         setHeroCarouselIndex(heroCarouselState.index + 1, { resetTimer: true });       }, heroCarouselState.autoplayMs);     }      function recalcHeroCarouselMetrics() {
@@ -1074,26 +1027,19 @@ function updateSystemOverview(){
       setOverviewText("heroRewardBadge", overview.heroRewardBadge);
       setOverviewText("heroRetentionBadge", overview.heroRetentionBadge);
       renderHeroPromoCarousel(overview);
-      renderHomeStats(data, { updatedLabel: overview.statsUpdatedLabel });
     }
     async function openInviteSheet(){       if (!ensureAuthThen("Davet sistemi")) return;       $("inviteHelp").textContent = "";
       $("inviteHelp").className = "field-help";       openSheet("invite", "Davet Et ve Kazan", "Davet kodunu ve bağlantını üret, tek dokunuşla paylaş.");       await loadInviteLink();     } 
-         function renderProfileStats(data = {}) {       const grid = $('profileStatsGrid');       const updated = $('profileStatsUpdated');       if (!grid) return;
-      const normalized = normalizeApiUser(data || {});       const progression = getProgressionData(normalized);       const stats = normalized.statistics && typeof normalized.statistics === 'object'         ? normalized.statistics         : (normalized.stats && typeof normalized.stats === 'object' ? normalized.stats : {});
-      const rows = [         ['Seviye', String(getUserLevel(normalized))],         ['Hesap XP', formatNumber(getUserAccountXp(normalized))],         ['Aylık Aktiflik', formatNumber(Number(normalized.monthlyActiveScore ?? stats.monthlyActiveScore ?? progression.monthlyActivity ?? 0) || 0)],         ['Toplam Raund', formatNumber(Number(normalized.totalRounds ?? stats.totalRounds ?? 0) || 0)],
-        ['Galibiyet', formatNumber(Number(normalized.totalWins ?? stats.totalWins ?? normalized.matchWins ?? normalized.chessWins ?? 0) || 0)],         ['Okunmamış Mesaj', formatNumber(Number(normalized.unread_messages ?? normalized.unreadMessages ?? stats.unreadMessages ?? 0) || 0)]       ];       const fragment = document.createDocumentFragment();       rows.forEach(([label, value]) => {
-        const card = document.createElement('div');         card.className = 'profile-stat-card';         card.append(createTextElement('span', '', label), createTextElement('strong', '', value));         fragment.appendChild(card);       });
-      grid.replaceChildren(fragment);       if (updated) {         const ts = Number(normalized.lastSeen || normalized.lastActiveAt || Date.now()) || Date.now();         updated.textContent = 'Backend verisi: ' + new Date(ts).toLocaleString('tr-TR');       }
-    }     function updateUserShell(){       const user = auth.currentUser;       const data = state.userData = normalizeApiUser(state.userData || {});       const progression = getProgressionData(data);
+         function updateUserShell(){       const user = auth.currentUser;       const data = state.userData = normalizeApiUser(state.userData || {});       const progression = getProgressionData(data);
       const accountLevel = clamp(Number(data.level ?? progression.level ?? data.accountLevel ?? progression.accountLevel ?? getUserLevel(data)) || 1, 1, 100);       const accountProgressPct = clamp(Number(data.progressPercent ?? progression.progressPercent ?? progression.accountLevelProgressPct ?? 0), 0, 100);       const monthlyActivity = Number(data.monthlyActiveScore ?? progression.monthlyActivity ?? 0);       const avatar = safeUrl(data.avatar || state.selectedAvatar || AVATARS[0]);       const username = data.username || user?.email || "Oyuncu";
       const displayFrame = 0;        $("loginBtn").style.display = user ? "none" : "inline-flex";       $("registerBtn").style.display = user ? "none" : "inline-flex";       $("topUser").classList.toggle("is-visible", !!user);
        if (user) {         $("headerBalance").textContent = formatNumber(data.balance || 0);         mountTopbarAvatar(avatar, displayFrame);         $("headerUsername").textContent = username;
         $("headerRankText").textContent = `Hesap Seviyesi ${accountLevel}`;         $("ddUsername").textContent = username;         $("ddLevel").textContent = `Seviye ${accountLevel}`;         $("ddNext").textContent = accountLevel < 100 ? `Seviye ${accountLevel + 1}` : 'MAX';         $("ddPct").textContent = `%${accountProgressPct.toFixed(1)}`;
         $("ddBar").style.width = `${accountProgressPct}%`;       }        const heroMeta = user         ? `Bakiye: ${formatNumber(data.balance || 0)} MC · ${user.emailVerified ? "E-posta doğrulandı" : "E-posta doğrulanmadı"} · Aylık Aktiflik: ${formatNumber(monthlyActivity)} · Hesap Seviyesi: ${accountLevel}`
-        : "Kayıt ol, bakiyeni ve hesap seviyeni canlı takip et.";        mountAvatarShell("heroProfileAvatarShell", avatar, displayFrame, 56, "pm-avatar--profile");       $("heroProfileName").textContent = user ? username : "Misafir Modu";       $("heroProfileMeta").textContent = heroMeta;
+        : "Kayıt ol, bakiyeni ve hesap seviyeni canlı takip et.";        mountAvatarShell("heroProfileAvatarShell", avatar, displayFrame, 56, "pm-avatar--profile");       $("heroProfileName").textContent = user ? username : "Giriş Yap";       $("heroProfileMeta").textContent = heroMeta;
       if ($("heroProgressText")) $("heroProgressText").textContent = accountLevel < 100 ? `%${accountProgressPct.toFixed(1)}` : "MAX";       if ($("heroProgressFill")) $("heroProgressFill").style.width = `${accountProgressPct}%`;       const accountLevelEl = document.getElementById('ui-account-level');       const monthlyActivityEl = document.getElementById('ui-monthly-activity');       if (accountLevelEl) accountLevelEl.textContent = String(accountLevel);
-      if (monthlyActivityEl) monthlyActivityEl.textContent = formatNumber(monthlyActivity);       renderProfileStats(data);        const heroAvatarShell = $("heroProfileAvatarShell");       if (heroAvatarShell) {
-        heroAvatarShell.style.cursor = user ? "pointer" : "default";         if (!heroAvatarShell.dataset.statsBound) {           heroAvatarShell.dataset.statsBound = 'true';           heroAvatarShell.addEventListener('click', () => {             const currentUser = auth.currentUser;             if (currentUser) window.showPlayerStats?.(currentUser.uid);           });         }       }        updateAppearanceSummary();
+      if (monthlyActivityEl) monthlyActivityEl.textContent = formatNumber(monthlyActivity);               const heroAvatarShell = $("heroProfileAvatarShell");       if (heroAvatarShell) {
+        heroAvatarShell.style.cursor = user ? "pointer" : "default";         if (!heroAvatarShell.dataset.statsBound) {           heroAvatarShell.dataset.statsBound = 'true';           heroAvatarShell.addEventListener('click', () => {             const currentUser = auth.currentUser;                        });         }       }        updateAppearanceSummary();
       updateSystemOverview();     }      function updateAppearanceSummary(){       const avatar = safeUrl(state.selectedAvatar || state.userData?.avatar || AVATARS[0]);
       const currentFrame = 0;       const username = state.userData?.username || auth.currentUser?.email || 'Oyuncu';       const titleEl = $("appearanceSummaryTitle");       const textEl = $("appearanceSummaryText"); 
       mountAvatarShell("appearancePreviewShell", avatar, currentFrame, 76, "pm-avatar--picker");        if (titleEl) titleEl.textContent = `${username} · Profil Fotoğrafı`;       if (textEl) textEl.textContent = 'Profil fotoğrafın sohbet, liderlik ve oyun alanlarında senkron görünür.';     }
@@ -1132,8 +1078,8 @@ function updateSystemOverview(){
       $("profileUsername").value = data.username || "";       $("profileEmail").value = data.email || user?.email || "";       const usernameChangeLimit = Number(data.usernameChangeLimit || 3);       const usernameRemaining = Math.max(0, Number(data.usernameChangeRemaining ?? (usernameChangeLimit - Number(data.userChangeCount || 0))));       const usernameLocked = usernameRemaining <= 0;
       $("profileUsername").disabled = usernameLocked;       $("profileUsername").classList.toggle("is-locked", usernameLocked);       $("usernameLimitHelp").textContent = usernameLocked         ? "Kullanıcı adı değiştirme hakkın doldu. Bu alan artık kilitli."         : `Kullanıcı Adı Toplam 3 Kez Değiştirilebilir. Kalan Hakkın: ${usernameRemaining}.`;
       $("usernameLimitHelp").className = `field-help ${usernameLocked ? "is-error" : ""}`;       $("usernameHelp").textContent = "";       $("usernameHelp").className = "field-help";       state.selectedAvatar = safeUrl(data.avatar || AVATARS[0]);       
-      renderAvatarSelectionBox();       updateAppearanceSummary();       renderProfileStats(data);       syncVerifyButtonState(); 
-      const profileSheetAvatarShell = $("profileSheetAvatarShell");       if (profileSheetAvatarShell) {         profileSheetAvatarShell.style.cursor = user ? "pointer" : "default";         if (!profileSheetAvatarShell.dataset.statsBound) {           profileSheetAvatarShell.dataset.statsBound = 'true';           profileSheetAvatarShell.addEventListener('click', () => {             const currentUser = auth.currentUser;             if (currentUser) window.showPlayerStats?.(currentUser.uid);           });         }       }
+      renderAvatarSelectionBox();       updateAppearanceSummary();              syncVerifyButtonState(); 
+      const profileSheetAvatarShell = $("profileSheetAvatarShell");       if (profileSheetAvatarShell) {         profileSheetAvatarShell.style.cursor = user ? "pointer" : "default";         if (!profileSheetAvatarShell.dataset.statsBound) {           profileSheetAvatarShell.dataset.statsBound = 'true';           profileSheetAvatarShell.addEventListener('click', () => {             const currentUser = auth.currentUser;                        });         }       }
     }       async function maybeShowPendingReward(){
       return;
     }      async function loadUserData(){       if (!auth.currentUser) {         state.userData = null;
@@ -1146,7 +1092,10 @@ function updateSystemOverview(){
        const query = (searchInput.value || "").trim().toLowerCase();       const filter = state.activeFilter || 'all';       const user = auth.currentUser;       const games = GAMES.filter((game) => {
         const matchesSearch = !query || `${game.name} ${game.desc} ${game.keywords}`.toLowerCase().includes(query);         if (!matchesSearch) return false;         if (filter === "all") return true;         if (filter === "auth") return game.access === "auth";         if (filter === "free") return game.access === "free";
         return game.category === filter;       });        const fragment = document.createDocumentFragment();       grid.classList.remove('is-loading');
-      grid.replaceChildren();       empty.hidden = games.length > 0;        games.forEach((game) => {         const card = document.createElement("article");
+      grid.replaceChildren();       empty.hidden = games.length > 0;
+       grid.dataset.mobileExpanded = '0';
+       const moreGamesBtn = $('gamesMoreBtn');
+       if (moreGamesBtn) {moreGamesBtn.hidden = games.length <= 4;moreGamesBtn.setAttribute('aria-expanded','false');moreGamesBtn.textContent='Diğer oyunları göster';}        games.forEach((game) => {         const card = document.createElement("article");
         card.className = `game-card fade-up ${getGameAccentClass(game)}`;         const gameTop = document.createElement('div');         gameTop.className = 'game-top';         const gameIcon = document.createElement('div');         gameIcon.className = 'game-icon';
         gameIcon.appendChild(createFaIcon(game.icon || 'fa-gamepad'));         const tagStack = document.createElement('div');         tagStack.className = 'tag-stack';         const categoryTag = createTextElement('span', 'mini-tag', game.category === 'online' ? 'Online' : 'Klasik');         if (game.category === 'online') categoryTag.prepend(createTextElement('span', 'live-dot', ''));
         const accessTag = createTextElement('span', 'mini-tag', game.access === 'auth' ? 'Giriş Gerekir' : 'Ücretsiz');         tagStack.append(categoryTag, accessTag);         gameTop.append(gameIcon, tagStack);          const gameBody = document.createElement('div');
@@ -1196,65 +1145,7 @@ function updateSystemOverview(){
       return wrap;
     }
 function getLeaderboardListForTab(tabType){       if (!currentLeaderboardData) return [];       if (tabType === 'level') return Array.isArray(currentLeaderboardData?.tabs?.level?.items) ? currentLeaderboardData.tabs.level.items : [];       if (tabType === 'activity') return Array.isArray(currentLeaderboardData?.tabs?.activity?.items) ? currentLeaderboardData.tabs.activity.items : [];
-      return [];     }      async function showPlayerStats(uid){       const targetUid = String(uid || '').trim();
-      if (!targetUid) {         showToast('İstatistikler', 'Oyuncu profili bulunamadı.', 'error');         return;       } 
-      const content = $('playerStatsContent');       if (!content) return;        const formatDate = (value, includeTime = false) => {         const date = new Date(Number(value) || 0);
-        if (!Number.isFinite(date.getTime()) || date.getTime() <= 0) return '—';         return includeTime ? date.toLocaleString('tr-TR') : date.toLocaleDateString('tr-TR');       };        const createHeader = () => {
-        const header = document.createElement('div');         header.className = 'ps-modal-header';         header.appendChild(createTextElement('div', 'ps-modal-title', 'Oyuncu İstatistikleri'));         header.firstElementChild.id = 'playerStatsTitle';         const close = document.createElement('button');
-        close.className = 'ps-modal-close';         close.type = 'button';         close.setAttribute('aria-label', 'Kapat');         close.appendChild(createFaIcon('fa-xmark'));         close.addEventListener('click', () => closeMatrixModal('playerStatsModal'));
-        header.appendChild(close);         return header;       };        const createStatsRow = (label, value, className = '') => {
-        const row = document.createElement('div');         row.className = 'player-stats-row';         row.appendChild(createTextElement('span', '', label));         const strong = createTextElement('strong', className, value);         row.appendChild(strong);
-        return row;       };        const renderStatusBody = (iconClass, message, tone = 'info') => {         const body = document.createElement('div');
-        body.className = 'ps-modal-body player-stats-status-body';         const wrap = document.createElement('div');         const icon = createFaIcon(iconClass);         if (iconClass.includes('spinner')) icon.classList.add('fa-spin', 'fa-2x');         icon.classList.add('player-stats-status-icon');
-        icon.dataset.tone = tone;         const text = document.createElement('p');         text.textContent = message;         wrap.append(icon, text);         body.appendChild(wrap);
-        return body;       };        content.replaceChildren(createHeader(), renderStatusBody('fa-spinner', 'İstatistikler çekiliyor...', 'info'));       openMatrixModal('playerStatsModal');
-       try {         const payload = await fetchPrivate(`/api/user-stats/${encodeURIComponent(targetUid)}`);         const p = normalizeApiUser(payload?.data || {});         const level = getUserLevel(p);
-        const isSelf = !!auth.currentUser && auth.currentUser.uid === String(p.uid || targetUid);          const body = document.createElement('div');         body.className = 'ps-modal-body player-stats-modal-body'; 
-        const summary = document.createElement('section');         summary.className = 'player-stats-summary-card';         const avatarShell = document.createElement('div');         avatarShell.className = 'player-stats-avatar-shell';         avatarShell.appendChild(createAvatarShellNode(p.avatar || AVATARS[0], 0, 80, 'pm-avatar--profile'));
-        summary.appendChild(avatarShell);         summary.appendChild(createTextElement('h3', 'player-stats-name', p.username || 'Oyuncu'));         const chips = document.createElement('div');         chips.className = 'player-stats-meta-chips';         chips.append(createTextElement('span', 'rank-badge rank-gold', 'Kayıt: ' + formatDate(p.createdAt)), createTextElement('span', 'rank-badge rank-silver', 'Son Görülme: ' + formatDate(p.lastLogin || p.lastSeen, true)));
-        summary.appendChild(chips);         body.appendChild(summary);          const general = document.createElement('section');         general.className = 'player-stats-panel';
-        general.appendChild(createTextElement('h4', 'player-stats-panel-title', 'Genel Durum'));         const generalRows = document.createElement('div');         generalRows.className = 'player-stats-rows';         generalRows.append(           createStatsRow('Seviye', String(level)),
-          createStatsRow('Hesap XP', formatNumber(Number(p.accountXp) || 0)),           createStatsRow('MC Bakiyesi', formatNumber(Number(p.balance ?? p.statistics?.balance ?? 0) || 0) + ' MC'),           createStatsRow('Aylık Aktiflik', formatNumber(Number(p.monthlyActiveScore) || 0)),           createStatsRow('Toplam Oynanan Raund', formatNumber(Number(p.totalRounds) || 0)),           createStatsRow('Harcanan Toplam MC', formatNumber(Number(p.totalSpentMc) || 0))         );
-        general.appendChild(generalRows);         body.appendChild(general);          const performance = document.createElement('section');         performance.className = 'player-stats-panel';
-        performance.appendChild(createTextElement('h4', 'player-stats-panel-title', 'Oyun Performansı'));
-        const performanceRows = document.createElement('div');         performanceRows.className = 'player-stats-rows';
-        const gameStats = p.gameStats && typeof p.gameStats === 'object' ? p.gameStats : {};
-        const totalStats = gameStats.total && typeof gameStats.total === 'object' ? gameStats.total : {};
-        const chessStats = gameStats.chess && typeof gameStats.chess === 'object' ? gameStats.chess : {};
-        const pistiStats = gameStats.pisti && typeof gameStats.pisti === 'object' ? gameStats.pisti : {};
-        const crashStats = gameStats.crash && typeof gameStats.crash === 'object' ? gameStats.crash : {};
-        const classicStats = gameStats.classic && typeof gameStats.classic === 'object' ? gameStats.classic : {};
-        performanceRows.append(
-          createStatsRow('Toplam Oyun', formatNumber(Number(totalStats.rounds ?? p.totalRounds) || 0)),
-          createStatsRow('Kazanma Oranı', '%' + (Number(totalStats.winRatePct ?? p.winRatePct ?? 0) || 0).toFixed(1), 'player-stats-positive'),
-          createStatsRow('Satranç', formatNumber(Number(chessStats.wins ?? p.chessWins) || 0) + ' G / ' + formatNumber(Number(chessStats.losses ?? p.chessLosses) || 0) + ' M'),
-          createStatsRow('Pişti', formatNumber(Number(pistiStats.wins ?? p.pistiWins) || 0) + ' G / ' + formatNumber(Number(pistiStats.losses ?? p.pistiLosses) || 0) + ' M'),
-          createStatsRow('Crash', formatNumber(Number(crashStats.rounds ?? p.crashRounds) || 0) + ' Raund'),
-          createStatsRow('Klasik Oyun', formatNumber(Number(classicStats.totalRuns) || 0) + ' Koşu / En iyi ' + formatNumber(Number(classicStats.bestScore) || 0))
-        );
-        performance.appendChild(performanceRows);         body.appendChild(performance);
-
-        const recentGames = Array.isArray(p.recentGames) ? p.recentGames.slice(0, 6) : [];
-        const recentPanel = document.createElement('section');         recentPanel.className = 'player-stats-panel';
-        recentPanel.appendChild(createTextElement('h4', 'player-stats-panel-title', 'Son Oyunlar'));
-        const recentRows = document.createElement('div');         recentRows.className = 'player-stats-rows';
-        if (recentGames.length) {
-          recentGames.forEach((game) => {
-            const label = String(game.title || game.gameType || 'Oyun');
-            const outcome = game.outcome === 'win' ? 'Kazandı' : (game.outcome === 'loss' ? 'Kaybetti' : (game.outcome === 'draw' ? 'Berabere' : String(game.result || 'Tamamlandı')));
-            recentRows.appendChild(createStatsRow(label, outcome + ' · ' + formatDate(game.createdAt, true)));
-          });
-        } else {
-          recentRows.appendChild(createStatsRow('Kayıt', 'Henüz son oyun kaydı yok.'));
-        }
-        recentPanel.appendChild(recentRows);         body.appendChild(recentPanel);
-
-        if (!isSelf) {           const addFriendButton = document.createElement('button');
-          addFriendButton.className = 'btn btn-primary player-stats-action';           addFriendButton.id = 'playerStatsAddFriendBtn';           addFriendButton.type = 'button';           addFriendButton.append(createFaIcon('fa-user-plus'), document.createTextNode('Arkadaş Ekle'));           addFriendButton.addEventListener('click', () => sendFriendRequest(String(p.uid || targetUid)));
-          body.appendChild(addFriendButton);         }          content.replaceChildren(createHeader(), body);       } catch (error) {
-        reportClientError('home.player_stats', error, { source: 'legacy-home.runtime.js', targetUid });
-        content.replaceChildren(createHeader(), renderStatusBody('fa-triangle-exclamation', error.message || 'Veri çekilemedi.', 'error'));       }     }     window.showPlayerStats = showPlayerStats;     window.openPlayerProfile = showPlayerStats;
-    window.showPlayerProfile = showPlayerStats;      function renderLeaderboardTab(tabType = "level"){
+      return [];     }      function renderLeaderboardTab(tabType = "level"){
       if (!currentLeaderboardData) return;
       currentLeaderboardTab = tabType;
       document.querySelectorAll("#leaderboardTabs .lb-tab-btn").forEach((btn) => {
@@ -1277,7 +1168,6 @@ function getLeaderboardListForTab(tabType){       if (!currentLeaderboardData) r
       if (!list.length) {
         container.dataset.widgetState = "empty";
         container.appendChild(buildLeaderboardState("empty", categoryLabel || "Liderlik verisi yok", tabType === "activity" ? "Aylık aktiflik sıralamasında henüz kayıt yok." : "Hesap seviyesi sıralamasında henüz kayıt yok."));
-        renderHomeStats(state.userData || {});
         return;
       }
       list.forEach((user, index) => {
@@ -1316,7 +1206,6 @@ function getLeaderboardListForTab(tabType){       if (!currentLeaderboardData) r
         item.append(rank, wrapper, name, score);
         container.appendChild(item);
       });
-      renderHomeStats(state.userData || {});
     }
 async function fetchLeaderboardPayload(){       const publicEndpoints = ['/api/leaderboard'];       let lastError = null;
        for (const endpoint of publicEndpoints) {         try {           const payload = await fetchPublic(endpoint);           if (payload && payload.ok !== false) return payload;
@@ -1343,7 +1232,6 @@ async function fetchLeaderboardPayload(){       const publicEndpoints = ['/api/l
           container.setAttribute("aria-busy", "false");
           container.appendChild(buildLeaderboardState("error", "Liderlik verisi alınamadı", error.message || "Sunucuya ulaşılamadı."));
         }
-        renderHomeStats(state.userData || {});
       }
     }
 function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = canvas.getContext("2d");
@@ -1357,12 +1245,18 @@ function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = c
       const data = state.userData || {};       const lastSpin = Number(data.lastSpin || data.lastSpinAt || 0);       const cooldownEl = $("wheelCooldownText");       const trFormatter = new Intl.DateTimeFormat('en-CA', { timeZone:'Europe/Istanbul', year:'numeric', month:'2-digit', day:'2-digit' });       const todayTr = trFormatter.format(new Date());       const lastTr = lastSpin ? trFormatter.format(new Date(lastSpin)) : '';       const lockedToday = !!lastSpin && todayTr === lastTr;       if (lockedToday) {
         const nowTr = new Date(new Date().toLocaleString('en-US', { timeZone:'Europe/Istanbul' }));         const nextMidnightTr = new Date(nowTr);         nextMidnightTr.setHours(24,0,0,0);         const diff = Math.max(0, nextMidnightTr.getTime() - nowTr.getTime());         const h = Math.floor(diff / 3600000);         const m = Math.floor((diff % 3600000) / 60000);         $("wheelSpinBtn").disabled = true;         if (cooldownEl) cooldownEl.textContent = `Türkiye saati 00:00 sonrası açılır: ${h} saat ${m} dakika.`;         $("wheelResult").textContent = `Bugünkü hakkını kullandın. Haklar Europe/Istanbul 00:00'da yenilenir.`;
       } else {         $("wheelSpinBtn").disabled = !auth.currentUser.emailVerified;         if (cooldownEl) cooldownEl.textContent = auth.currentUser.emailVerified ? "Çark çevirmeye hazır." : "E-postanı onayla, çark açılır.";         if (!auth.currentUser.emailVerified) $("wheelResult").textContent = "Çarkı açmak için e-posta doğrulaması gerekli.";       }
-    }      function resolveWheelSpinResponse(response){       const prize = Number(response?.prize ?? response?.amount ?? 0);       let index = Number(response?.index);       if (!Number.isInteger(index) || index < 0 || index >= REWARDS.length || Number(REWARDS[index]?.val || 0) !== prize) {         index = REWARDS.findIndex((reward) => Number(reward.val || 0) === prize);       }       if (!Number.isInteger(index) || index < 0 || index >= REWARDS.length) throw new Error("Sunucu çark sonucunu doğrulayamadı.");       if (!Number.isFinite(prize) || prize <= 0) throw new Error("Sunucu çark ödülünü doğrulayamadı.");       return { index, prize };     }      async function spinWheel(){       try {         if (!auth.currentUser) throw new Error("Önce giriş yapmalısın.");
-        if (!auth.currentUser.emailVerified) throw new Error("Çark için önce e-postanı doğrulamalısın.");         $("wheelSpinBtn").disabled = true;         $("wheelResult").textContent = "Sunucuda hesaplanıyor…";         const response = await fetchPrivate("/api/wheel/spin", "POST");         const resolvedSpin = resolveWheelSpinResponse(response);         const prize = resolvedSpin.prize;
-        const randomIndex = resolvedSpin.index;         const segmentDeg = 360 / REWARDS.length;         const stopAt = 360 - (randomIndex * segmentDeg);         const extraTours = 3600;         state.wheelRotation += extraTours + stopAt;
+    }      function resolveWheelSpinResponse(response){       const prize = Number(response?.prize ?? response?.amount ?? 0);       let index = Number(response?.index);       if (!Number.isInteger(index) || index < 0 || index >= REWARDS.length || Number(REWARDS[index]?.val || 0) !== prize) {         index = REWARDS.findIndex((reward) => Number(reward.val || 0) === prize);       }       if (!Number.isInteger(index) || index < 0 || index >= REWARDS.length) throw new Error("Çark sonucu doğrulanamadı. Lütfen yeniden deneyin.");       if (!Number.isFinite(prize) || prize <= 0) throw new Error("Çark ödülü doğrulanamadı. Lütfen yeniden deneyin.");       return { index, prize };     }      async function spinWheel(){       try {         if (!auth.currentUser) throw new Error("Önce giriş yapmalısın.");
+        if (!auth.currentUser.emailVerified) throw new Error("Çark için önce e-postanı doğrulamalısın.");         $("wheelSpinBtn").disabled = true;         $("wheelResult").textContent = "Ödülünüz belirleniyor…";         const requestId = state.pendingWheelRequestId || (state.pendingWheelRequestId = crypto.randomUUID());
+        const response = await fetchPrivate("/api/wheel/spin", "POST", {requestId});
+        state.pendingWheelRequestId = null;         const resolvedSpin = resolveWheelSpinResponse(response);         const prize = resolvedSpin.prize;
+        const randomIndex = resolvedSpin.index;         const segmentDeg = 360 / REWARDS.length;         const desiredAngle = ((360 - (randomIndex + 0.5) * segmentDeg) % 360 + 360) % 360;         const currentAngle = ((state.wheelRotation % 360) + 360) % 360;         const advanceAngle = (desiredAngle - currentAngle + 360) % 360;         state.wheelRotation += 3600 + advanceAngle;
         $("wheelCanvas").style.transform = `rotate(${state.wheelRotation}deg)`;         setTimeout(async () => {           $("wheelResult").textContent = `Başarılı! ${formatNumber(prize)} MC kazandın.`;           showToast("Çark sonucu", `${formatNumber(prize)} MC hesabına işlendi.`, "success");           await loadUserData();
-          await refreshWheelUI();         }, 5000);       } catch (error) {         $("wheelResult").textContent = error.message;         $("wheelSpinBtn").disabled = false;
-        showToast("Çark hatası", error.message, "error");       }     }      async function submitPromo(){
+          await refreshWheelUI();         }, 5000);       } catch (error) {         const wheelMessage = /WHEEL_ALREADY_CLAIMED_TODAY/i.test(String(error?.message || '')) ? 'Bugünkü çark hakkınızı kullandınız.' :
+          /EMAIL_VERIFICATION_REQUIRED/i.test(String(error?.message || '')) ? 'Çarkı kullanmak için e-postanızı doğrulayın.' :
+          'İşlem sonucu doğrulanamadı. Lütfen durumunuzu yenileyin.';
+        $("wheelResult").textContent = wheelMessage;
+        $("wheelSpinBtn").disabled = false;
+        showToast("Çark bildirimi", wheelMessage, "warning");       }     }      async function submitPromo(){
       try {         if (!auth.currentUser) throw new Error("Önce giriş yapmalısın.");         if (!auth.currentUser.emailVerified) throw new Error("Promo için önce e-postanı doğrulamalısın.");         const code = ($("promoCode").value || "").trim().toUpperCase();         if (!code) throw new Error("Promo kodu gir.");
         $("promoHelp").textContent = "Doğrulanıyor…";         $("promoHelp").className = "field-help";         const response = await fetchPrivate("/api/promo/claim", "POST", { code });         $("promoCode").value = "";         $("promoHelp").textContent = `Onaylandı! ${formatNumber(response.amount)} MC eklendi.`;
         $("promoHelp").className = "field-help is-success";         showToast("Promo başarılı", `${formatNumber(response.amount)} MC hesabına işlendi.`, "success");         await loadUserData();       } catch (error) {         $("promoHelp").textContent = error.message;
@@ -1446,12 +1340,12 @@ function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = c
           if (action === 'promo') { event.preventDefault(); openPromoSheet(); return; }           if (action === 'profile') { event.preventDefault(); openProfileSheet(); return; }           return;         } 
         if (trigger.matches('.nav-link[href^="#"]')) {           const target = trigger.getAttribute('href');           if (!target) return;           const section = document.querySelector(target);           if (!section) return;
           event.preventDefault();           section.scrollIntoView({ behavior:'smooth', block:'start' });         }       }, { passive:false });     }
-     function hydrateHomepageCore(){       if (!document.body.dataset.leaderboardStatsDelegationBound) {         document.body.dataset.leaderboardStatsDelegationBound = '1';         document.addEventListener('click', (event) => {           const item = event.target?.closest?.('#leaderboardListArea .lb-item');           if (!item || item.classList.contains('skeleton')) return;           const targetUid = String(item.dataset.uid || '').trim() || String(auth.currentUser?.uid || '').trim();           if (targetUid && typeof showPlayerStats === 'function') showPlayerStats(targetUid);         });       }       safeExecute('games skeleton', () => safeRenderGameShowcaseSkeleton(3));       safeExecute('leaderboard skeleton', leaderboardSkeleton);       requestAnimationFrame(() => {
+     function hydrateHomepageCore(){       if (!document.body.dataset.leaderboardStatsDelegationBound) {         document.body.dataset.leaderboardStatsDelegationBound = '1';                }       safeExecute('games skeleton', () => safeRenderGameShowcaseSkeleton(3));       safeExecute('leaderboard skeleton', leaderboardSkeleton);       requestAnimationFrame(() => {
         safeExecute('render games', renderGames);         safeExecute('update overview', updateSystemOverview);         Promise.resolve(loadLeaderboard()).catch((error) => console.error('[PlayMatrix] leaderboard boot', error));         safeExecute('update user shell', updateUserShell);         safeExecute('verify button', syncVerifyButtonState);
         safeExecute('mobile tabs', updateMobileTabs);         safeExecute('fade up reveal', revealFadeUps);       });     } 
     function bindEvents(){       bindIfPresent("profileTrigger", "click", (e) => {         e.stopPropagation();         playSound("tap");         $("userDropdown").classList.toggle("active");
       });        document.addEventListener("click", (e) => {         if ($("userDropdown") && !e.target.closest("#topUser")) $("userDropdown").classList.remove("active");       });
-       bindIfPresent("navProfileItem", "click", () => { $("userDropdown").classList.remove("active"); openProfileSheet(); });       bindIfPresent("navWheelItem", "click", () => { $("userDropdown").classList.remove("active"); openWheelSheet(); });       bindIfPresent("navBonusItem", "click", () => { $("userDropdown").classList.remove("active"); openPromoSheet(); });       bindIfPresent("navMarketItem", "click", () => { $("userDropdown").classList.remove("active"); openMarketSheet(); });       bindIfPresent("navSupportItem", "click", () => { $("userDropdown").classList.remove("active"); openSupportSheet(); });
+       bindIfPresent("navProfileItem", "click", () => { $("userDropdown").classList.remove("active"); openProfileSheet(); });       bindIfPresent("navWheelItem", "click", () => { $("userDropdown").classList.remove("active"); openWheelSheet(); });       bindIfPresent("navBonusItem", "click", () => { $("userDropdown").classList.remove("active"); openPromoSheet(); });       bindIfPresent("navSupportItem", "click", () => { $("userDropdown").classList.remove("active"); openSupportSheet(); });
       bindIfPresent("navInviteItem", "click", async () => { $("userDropdown").classList.remove("active"); await openInviteSheet(); });       bindIfPresent("navSocialItem", "click", async () => { $("userDropdown").classList.remove("active"); await primeRealtimeUX().catch(() => null); await openSocialSheet(); });       bindIfPresent("logoutDropdownBtn", "click", async () => { $("userDropdown").classList.remove("active"); await endServerSession(); await signOut(auth); closeSheet(); showToast("Çıkış yapıldı", "Oturum güvenli şekilde kapatıldı.", "info"); });        document.querySelectorAll("#leaderboardTabs .lb-tab-btn").forEach((button) => {
         button.addEventListener("click", () => renderLeaderboardTab(button.dataset.lbTab || "level"));       });       const openAvatarSelectionBtn = $("openAvatarSelectionBtn");       if (openAvatarSelectionBtn) openAvatarSelectionBtn.addEventListener("click", openAvatarSelectionModal);       
              document.querySelectorAll('.ps-modal').forEach((modal) => {         modal.addEventListener('click', (event) => {           if (event.target === modal) closeMatrixModal(modal.id);         });
@@ -1459,8 +1353,7 @@ function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = c
         }       });       bindIfPresent("sheetBackdrop", "click", closeSheet);       bindIfPresent("sheetClose", "click", closeSheet);       bindIfPresent("socialHomeBackBtn", "click", closeSheet);       $("authSegment").querySelectorAll("button").forEach((button) => button.addEventListener("click", () => setAuthMode(button.dataset.authMode)));
       bindIfPresent("authSubmitBtn", "click", submitAuth);       bindIfPresent("forgotPasswordBtn", "click", () => {         $("forgotEmail").value = $("authEmail").value || "";         $("forgotHelp").textContent = "";         $("forgotHelp").className = "field-help";
         openSheet("forgot", "Şifremi Unuttum", "Sıfırlama bağlantısı e-posta adresine gönderilir.");       });       bindIfPresent("forgotSubmitBtn", "click", forgotPassword);        bindIfPresent("profileSaveBtn", "click", saveProfile);
-      bindIfPresent("verifyEmailBtn", "click", handleVerifyEmailAction);       bindIfPresent("logoutBtn", "click", async () => { await endServerSession(); await signOut(auth); closeSheet(); showToast("Çıkış yapıldı", "Oturum güvenli şekilde kapatıldı.", "info"); });       bindIfPresent("wheelSpinBtn", "click", spinWheel);       bindIfPresent("wheelRefreshBtn", "click", refreshWheelUI);       bindIfPresent("promoSubmitBtn", "click", submitPromo);       bindIfPresent("homeStatsRetryBtn", "click", async () => { renderHomeStats(state.userData || {}, { state: "loading" }); await Promise.allSettled([auth.currentUser ? loadUserData() : Promise.resolve(), loadLeaderboard()]); renderHomeStats(state.userData || {}); });
-      bindIfPresent("supportSubmitBtn", "click", submitSupport);       bindIfPresent("generateInviteBtn", "click", loadInviteLink);       bindIfPresent("copyInviteCodeBtn", "click", () => copyFieldValue("inviteCode", "Davet kodu panoya kopyalandı."));       bindIfPresent("copyInviteLinkBtn", "click", () => copyFieldValue("inviteLink", "Davet bağlantısı panoya kopyalandı."));       document.querySelectorAll(".ps-tab").forEach((button) => {
+      bindIfPresent("verifyEmailBtn", "click", handleVerifyEmailAction);       bindIfPresent("logoutBtn", "click", async () => { await endServerSession(); await signOut(auth); closeSheet(); showToast("Çıkış yapıldı", "Oturum güvenli şekilde kapatıldı.", "info"); });       bindIfPresent("wheelSpinBtn", "click", spinWheel);       bindIfPresent("wheelRefreshBtn", "click", refreshWheelUI);       bindIfPresent("promoSubmitBtn", "click", submitPromo);       bindIfPresent("supportSubmitBtn", "click", submitSupport);       bindIfPresent("generateInviteBtn", "click", loadInviteLink);       bindIfPresent("copyInviteCodeBtn", "click", () => copyFieldValue("inviteCode", "Davet kodu panoya kopyalandı."));       bindIfPresent("copyInviteLinkBtn", "click", () => copyFieldValue("inviteLink", "Davet bağlantısı panoya kopyalandı."));       document.querySelectorAll(".ps-tab").forEach((button) => {
         button.addEventListener("click", () => {           playSound("tap");           const targetTab = button.dataset.socialTab || "global";           setSocialTab(targetTab, { resetSelection: true, openPanel: targetTab === "global" || targetTab === "add" });         });
       });       bindIfPresent("psSendBtn", "click", () => { primeRealtimeUX().catch(() => null); sendSocialMessage(); });       bindIfPresent("psChatInput", "keydown", (event) => {         if (event.key === "Enter") {           event.preventDefault();
           sendSocialMessage();         }       });       bindIfPresent("psChatInput", "input", () => {         setActiveComposerDraft($("psChatInput")?.value || "");
@@ -1471,19 +1364,28 @@ function drawWheel(){       const canvas = $("wheelCanvas");       const ctx = c
         state.usernameDebounce = setTimeout(checkUsernameAvailability, 320);       });       bindIfPresent("soundToggle", "click", () => {         state.soundEnabled = !state.soundEnabled;         localStorage.setItem("pm_ui_sound", state.soundEnabled ? "on" : "off");
         updateSoundUI();         showToast("Arayüz sesi", state.soundEnabled ? "Arayüz tık sesleri açık." : "Arayüz sesleri kapatıldı.", "info");       });        document.querySelectorAll(".filter-chip").forEach((button) => {
         button.addEventListener("click", () => {           document.querySelectorAll(".filter-chip").forEach((chip) => chip.classList.remove("is-active"));           button.classList.add("is-active");           state.activeFilter = button.dataset.filter;           renderGames();
-        });       });        bindIfPresent("gameSearch", "input", renderGames); 
+        });       });        bindIfPresent("gameSearch", "input", renderGames);
+      bindIfPresent("gamesMoreBtn", "click", () => {
+        const grid = $('gamesGrid');
+        const button = $('gamesMoreBtn');
+        if (!grid || !button) return;
+        const expanded = grid.dataset.mobileExpanded !== '1';
+        grid.dataset.mobileExpanded = expanded ? '1' : '0';
+        button.setAttribute('aria-expanded',String(expanded));
+        button.textContent = expanded ? 'Daha az oyun göster' : 'Diğer oyunları göster';
+      }); 
       window.addEventListener("scroll", updateMobileTabs, { passive:true });       window.addEventListener("scroll", revealFadeUps, { passive:true });       window.addEventListener("resize", revealFadeUps, { passive:true });     } 
     function isTransientApiBootstrapError(error) {       const message = String(error?.message || '').toLowerCase();       return message.includes('404')         || message.includes('405')         || message.includes('502')
         || message.includes('503')         || message.includes('504')         || message.includes('firebase admin')         || message.includes('credential')         || message.includes('hazır değil')         || message.includes('hazir degil')         || message.includes('bağlantı sağlanamadılamadı')         || message.includes('fetch')         || message.includes('network');
     }      onAuthStateChanged(auth, async (user) => {       state.authBootAttemptedAt = Date.now();       if (state.authBootInFlight) return;
       state.authBootInFlight = true;       try {         if (user) {           state.authStatus = "syncing";           state.authReady = false;           const bootstrapPayload = await bootstrapServerSession(user, { force: true, forceRefresh: true });
-          if (!bootstrapPayload || bootstrapPayload.ok === false) {             throw new Error('Sunucu oturumu hazırlanamadı.');           }           state.authReady = true;           state.authStatus = "authenticated";           await loadUserData();
+          if (!bootstrapPayload || bootstrapPayload.ok === false) {             throw new Error('Oturum bilgileri doğrulanamadı.');           }           state.authReady = true;           state.authStatus = "authenticated";           await loadUserData();
           startActivityHeartbeat();           await tryClaimPendingReferral();           await ensureRealtimeConnection(false, { reason: 'auth_boot' }).catch(() => null);           await loadFriends().catch(() => null);         } else {
           state.authReady = false;           state.authStatus = "guest";           stopActivityHeartbeat();           disconnectRealtime({ preserveIntent: false });           state.userData = null;                     state.friends = { accepted: [], incoming: [], outgoing: [], counts: { accepted:0, incoming:0, outgoing:0, online:0 } };
           state.lobbyMessages = [];           resetSocialState();           safeExecute('render social hub (guest)', renderSocialHub);           safeExecute('update user shell (guest)', updateUserShell);           safeExecute('verify button (guest)', syncVerifyButtonState);
         }       } catch (error) {         console.error('[PlayMatrix] auth state flow', error);         if (user) {           if (isTransientApiBootstrapError(error)) {
             state.authReady = false;             state.authStatus = "degraded";             stopActivityHeartbeat();             disconnectRealtime({ preserveIntent: false });             notifySessionIssueOnce('Bağlantı durumu', 'Hesap verileri geçici olarak yüklenemedi. Sayfayı yenileyip tekrar dene.', 'warning');             safeExecute('update user shell (degraded)', updateUserShell);
-          } else {             await forceSecureLogout(error?.message || 'Oturum hazırlanamadı.', { silent: false });           }         }       } finally {
+          } else {             state.authReady = false; state.authStatus = 'degraded'; notifySessionIssueOnce('Oturum kontrolü', 'Oturum bilgilerinizi doğrularken sorun oluştu. Yeniden deneyin.', 'warning');           }         }       } finally {
         state.authBootInFlight = false;         safeExecute('render games after auth', renderGames);         await Promise.resolve(loadLeaderboard()).catch((error) => console.error('[PlayMatrix] leaderboard after auth', error));         safeExecute('mobile tabs after auth', updateMobileTabs);       }
     });      document.addEventListener("mousemove", (event) => {       document.documentElement.style.setProperty("--mx", `${(event.clientX / window.innerWidth) * 100}%`);       document.documentElement.style.setProperty("--my", `${(event.clientY / window.innerHeight) * 100}%`);
     }, { passive:true });       safeExecute('capture referral', captureReferralFromUrl);     safeExecute('social badge', updateSocialConnectionBadge);

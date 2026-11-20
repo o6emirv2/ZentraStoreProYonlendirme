@@ -36,32 +36,21 @@ const CHAT_POLICY = Object.freeze({
 const fb = () => initFirebaseAdmin();
 function emailVerified(req) { return req.user?.email_verified === true || req.user?.emailVerified === true; }
 function addProgression(profile) {
-  const xpRaw = profile.accountXp ?? profile.xp ?? profile.accountLevelScore ?? '0';
-  const progression = getProgression(xpRaw);
+  const progression = getProgression(profile);
   return {
     ...profile,
-    xp: progression.xp,
-    accountXp: progression.xp,
-    currentXp: progression.currentXp,
-    accountLevel: progression.level,
-    level: progression.level,
+    accountLevel: progression.level, level: progression.level,
     accountLevelProgressPct: progression.progressPercent,
     progressPercent: progression.progressPercent,
-    currentLevelStartXp: progression.currentLevelStartXp,
-    nextLevelXp: progression.nextLevelXp,
-    xpIntoLevel: progression.xpIntoLevel,
-    xpToNextLevel: progression.xpToNextLevel,
-    isMaxLevel: progression.isMaxLevel,
-    formattedXp: progression.formattedXp,
-    formattedNextLevelXp: progression.formattedNextLevelXp,
-    formattedXpToNextLevel: progression.formattedXpToNextLevel,
+    accountProgressionVersion: progression.version,
+    accountLevelCurveMode: progression.curveMode,
     progression
   };
 }
 function defaultProfile(req, uid, seed = {}) {
   const email = s(req.user?.email || req.user?.firebase?.identities?.email?.[0] || seed.email || '', 160);
   const username = s(seed.username || req.user?.name || (email ? email.split('@')[0] : `Oyuncu-${String(uid).slice(0,5)}`), 32);
-  return addProgression({ uid, email, username, fullName: seed.fullName || username, displayName: username, avatar: seed.avatar || DEFAULT_AVATAR, balance: Number(seed.balance ?? SIGNUP_MC) || 0, signupBonusClaimed: true, xp: 0, accountXp: 0, monthlyActiveScore: 0, totalRounds: 0, createdAt: now(), lastLogin: now(), lastSeen: now(), gameStats: { total: { rounds: 0, wins: 0, losses: 0, winRatePct: 0 }, chess: {}, pisti: {}, crash: {}, classic: {} } });
+  return addProgression({ uid, email, username, fullName: seed.fullName || username, displayName: username, avatar: seed.avatar || DEFAULT_AVATAR, balance: Number(seed.balance ?? SIGNUP_MC) || 0, signupBonusClaimed: true, accountLevel: 1, accountLevelProgressTicks: 0, monthlyActiveScore: 0, totalRounds: 0, createdAt: now(), lastLogin: now(), lastSeen: now(), gameStats: { total: { rounds: 0, wins: 0, losses: 0, winRatePct: 0 }, chess: {}, pisti: {}, crash: {}, classic: {} } });
 }
 async function grantEmailVerifyRewardIfNeeded(req, uid, profile = {}) {
   if (!uid || !emailVerified(req) || profile.emailVerifyRewardClaimed) return profile;
@@ -80,7 +69,8 @@ async function grantEmailVerifyRewardIfNeeded(req, uid, profile = {}) {
   return fresh?.exists ? { ...profile, ...fresh.data(), uid } : { ...profile, emailVerified: true, emailVerifyRewardClaimed: true };
 }
 async function readProfile(req, uid = uidOf(req), seed = {}) {
-  const safeUid = uid || 'guest';
+  if (!uid) throw Object.assign(new Error('AUTH_REQUIRED'), {statusCode:401});
+  const safeUid = uid;
   let profile = defaultProfile(req, safeUid, seed);
   const { db } = fb();
   if (!db && uid) throw Object.assign(new Error('DATA_NOT_READY'),{statusCode:503});
@@ -108,34 +98,23 @@ async function readProfile(req, uid = uidOf(req), seed = {}) {
   return addProgression(profile);
 }
 async function writeProfile(uid, patch) { const { db } = fb(); if (db && uid) await db.collection('users').doc(uid).set({ ...patch, updatedAt: now() }, { merge: true }); }
-async function addBalance(uid, amount, reason, key) {
-  const { db, admin } = fb();
-  const safeAmount = Math.floor(Number(amount) || 0);
-  if (!uid || !safeAmount) return { ok: true, amount: safeAmount, reason, firestore: false };
-  if (!db || !admin) return { ok: false, error: 'DATA_NOT_READY' };
-  return runOnce({ key, db, execute: async () => {
-    const userRef = db.collection('users').doc(uid);
-    let nextBalance = 0;
-    await db.runTransaction(async (tx) => {
-      const snap = await tx.get(userRef);
-      if (!snap.exists) throw Object.assign(new Error('PROFILE_NOT_READY'),{statusCode:409});
-      const current=Number(snap.data().balance);
-      if (!Number.isSafeInteger(current) || current<0) throw Object.assign(new Error('INVALID_BALANCE'),{statusCode:409});
-      if (safeAmount < 0 && current + safeAmount < 0) throw Object.assign(new Error('INSUFFICIENT_BALANCE'), { statusCode: 409, current });
-      nextBalance = Math.max(0, current + safeAmount);
-      tx.set(userRef, { balance: nextBalance, updatedAt: now() }, { merge: true });
-      tx.set(db.collection('audit').doc(`economy_${crypto.randomUUID()}`), { uid, amount: safeAmount, reason, balanceAfter: nextBalance, at: now() }, { merge: true });
-    });
-    return { ok: true, amount: safeAmount, reason, balance: nextBalance };
-  }});
-}
 function runtimePayload() { return { ok: true, runtime: { version: 8, environment: env.nodeEnv, publicBaseUrl: env.publicBaseUrl, canonicalOrigin: env.canonicalOrigin, apiBase: env.publicApiBase || env.publicBackendOrigin, expectedFirebaseProjectId: env.firebase.publicConfig.projectId, firebase: env.firebase.publicConfig, firebaseReady: true, source: 'render-env-contract' }, apiBase: env.publicApiBase || env.publicBackendOrigin, canonicalOrigin: env.canonicalOrigin, firebase: env.firebase.publicConfig }; }
 async function leaderboardProfiles() { const { db } = fb(); if (!db) return []; try { const snap = await db.collection('users').limit(500).get(); return snap.docs.map(d => ({ uid: d.id, ...d.data() })); } catch { return []; } }
-function xpBig(value = 0) { try { const raw = String(value ?? '0').replace(/[^0-9]/g, ''); return raw ? BigInt(raw) : 0n; } catch { return 0n; } }
-function safeMetricNumber(value = 0) { const big = xpBig(value); return big > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(big); }
-function lbItems(list, metric) { return list.map((raw, i) => { const p = addProgression(raw); const wins = Number(p?.stats?.totalWins ?? p?.statistics?.totalWins ?? p?.gameStats?.total?.wins ?? p?.totalWins ?? 0) || 0; const balance = Number(p.balance ?? p.mc ?? p?.statistics?.balance ?? 0) || 0; const xpExact = String(p.accountXp || p.xp || '0'); return { uid: p.uid || `guest_${i}`, username: p.username || p.displayName || 'Oyuncu', avatar: p.avatar || DEFAULT_AVATAR, balance, mc: balance, stats: { ...(p.stats || {}), totalWins: wins }, statistics: { ...(p.statistics || {}), totalWins: wins, balance }, accountXp: safeMetricNumber(xpExact), accountXpExact: xpExact, accountLevel: Number(p.accountLevel || 1), monthlyActiveScore: Number(p.monthlyActiveScore || 0), leaderboard: { rank: i + 1, metricKey: metric === 'activity' ? 'monthlyActiveScore' : 'accountXp', metricLabel: metric === 'activity' ? 'Aylık Aktiflik' : 'Hesap XP', metricValue: metric === 'activity' ? Number(p.monthlyActiveScore || 0) : safeMetricNumber(xpExact), metricValueExact: metric === 'activity' ? String(Number(p.monthlyActiveScore || 0)) : xpExact } }; }); }
+function lbItems(list, metric) {
+  return list.map((raw,i)=>{
+    const p=addProgression(raw);
+    const wins=Number(p.gameStats?.total?.wins||0);
+    const balance=Number(p.balance||0);
+    return {uid:p.uid||'',username:p.username||p.displayName||'Oyuncu',avatar:p.avatar||DEFAULT_AVATAR,balance,mc:balance,
+      stats:{totalWins:wins},accountLevel:p.accountLevel,accountLevelProgressPct:p.accountLevelProgressPct,
+      monthlyActiveScore:Number(p.monthlyActiveScore||0),
+      leaderboard:{rank:i+1,metricKey:metric==='activity'?'monthlyActiveScore':'accountLevel',
+      metricLabel:metric==='activity'?'Aylık Aktiflik':'Hesap Seviyesi',
+      metricValue:metric==='activity'?Number(p.monthlyActiveScore||0):p.accountLevel}};
+  });
+}
 function gameProfileFromReq(req, fallbackName = 'Oyuncu') { const u = req.__pmProfile || {}; return { uid: uidOf(req), username: u.username || u.displayName || fallbackName, avatar: u.avatar || DEFAULT_AVATAR,  }; }
-async function attachProfile(req, _res, next) { try { req.__pmProfile = await readProfile(req, uidOf(req)); } catch (_) { req.__pmProfile = defaultProfile(req, uidOf(req) || 'guest'); } next(); }
+async function attachProfile(req, _res, next) { try { req.__pmProfile = await readProfile(req, uidOf(req)); } catch (_) { req.__pmProfile = defaultProfile(req, uidOf(req)); } next(); }
 
 function matrixSecret() {
   return [process.env.ADMIN_PANEL_SECOND_FACTOR_HASH_HEX || '', process.env.ADMIN_PANEL_SECOND_FACTOR_SALT_HEX || '', process.env.ADMIN_PANEL_THIRD_FACTOR_NAME || '', process.env.ADMIN_UIDS || '', process.env.ADMIN_EMAILS || '', process.env.FIREBASE_PROJECT_ID || '', 'playmatrix_admin_matrix_v2'].join('|');
@@ -152,11 +131,6 @@ function verifySecondFactor(password='') { const raw=String(process.env.ADMIN_PA
 function verifyThirdFactor(name='') { const expected=String(process.env.ADMIN_PANEL_THIRD_FACTOR_NAME||''); const input=String(name||''); if(!expected||!input)return false; const a=Buffer.from(input.normalize('NFKC')), b=Buffer.from(expected.normalize('NFKC')); return a.length===b.length && crypto.timingSafeEqual(a,b); }
 function issueClientKey(req) { return signMatrix({ typ:'pm_admin_client_key', uid:uidOf(req), email:String(req.user?.email||'').toLowerCase(), at:now(), exp:now()+12*3600000, nonce:crypto.randomBytes(8).toString('hex') }); }
 function verifyClientKey(key='') { const p=verifyMatrixToken(key); return !!(p&&p.typ==='pm_admin_client_key'&&Number(p.exp||0)>now()); }
-function requireMatrixAdmin(req,res,next){ const key=String(req.headers['x-admin-client-key']||''); if(verifyClientKey(key)) return next(); return requireAuth(req,res,()=>requireAdmin(req,res,next)); }
-
-
-
-
 function primaryAdmin(){ return { uid: env.adminUids[0] || '', email: env.adminEmails[0] || '' }; }
 function isConfiguredAdmin(email='', uid=''){ const e=String(email||'').trim().toLowerCase(); const u=String(uid||'').trim(); return (!!e && env.adminEmails.includes(e)) || (!!u && env.adminUids.includes(u)); }
 function compareHex(a='',b=''){ const x=String(a||'').toLowerCase(), y=String(b||'').toLowerCase(); if(!x||!y||x.length!==y.length)return false; return crypto.timingSafeEqual(Buffer.from(x),Buffer.from(y)); }
@@ -182,8 +156,18 @@ router.get('/auth/session/status', (req, res) => { const token = s(req.headers['
 router.get('/me', requireAuth, async (req, res) => res.json({ ok: true, user: await readProfile(req) }));
 router.post('/me/activity/heartbeat', requireAuth, async (req, res) => { const uid = uidOf(req); runtimeStore.presence.set(uid, { uid, status: 'online', activity: s(req.body?.activity, 40), at: now() }, 180000); res.json({ ok: true, at: now() }); });
 router.post('/me/showcase', requireAuth, async (req, res) => { const uid = uidOf(req); const showcase = { title: s(req.body?.title, 60), bio: sanitizeText(req.body?.bio || '', 180), updatedAt: now() }; await writeProfile(uid, { showcase }); res.json({ ok: true, showcase }); });
-router.get('/user-stats/:uid', requireAuth, async (req, res) => res.json({ ok: true, data: await readProfile(req, s(req.params.uid, 128)) }));
-router.get('/leaderboard', async (_req, res) => { const profiles = await leaderboardProfiles(); const fallback = profiles.length ? profiles : [addProgression({ uid: 'playmatrix', username: 'PlayMatrix', accountXp: 0, avatar: DEFAULT_AVATAR })]; const byLevel = [...fallback].sort((a,b)=> xpBig(b.accountXp ?? b.xp) > xpBig(a.accountXp ?? a.xp) ? 1 : xpBig(b.accountXp ?? b.xp) < xpBig(a.accountXp ?? a.xp) ? -1 : 0); const byActivity = [...fallback].sort((a,b)=>Number(b.monthlyActiveScore||0)-Number(a.monthlyActiveScore||0)); res.json({ ok: true, generatedAt: now(), tabs: { level: { label: 'En Yüksek Hesap Seviyesi', metricKey: 'accountXp', items: lbItems(byLevel.slice(0,25), 'level') }, activity: { label: 'En Çok Aktif Oyuncular', metricKey: 'monthlyActiveScore', items: lbItems(byActivity.slice(0,25), 'activity') } } }); });
+router.get('/leaderboard', async (_req,res)=>{
+  const profiles=await leaderboardProfiles();
+  const byLevel=[...profiles].sort((a,b)=>{
+    const x=getProgression(a),y=getProgression(b);
+    return y.level-x.level || y.progressPercent-x.progressPercent;
+  });
+  const byActivity=[...profiles].sort((a,b)=>Number(b.monthlyActiveScore||0)-Number(a.monthlyActiveScore||0));
+  res.json({ok:true,generatedAt:now(),tabs:{
+    level:{label:'En Yüksek Hesap Seviyesi',metricKey:'accountLevel',items:lbItems(byLevel.slice(0,25),'level')},
+    activity:{label:'En Çok Aktif Oyuncular',metricKey:'monthlyActiveScore',items:lbItems(byActivity.slice(0,25),'activity')}
+  }});
+});
 router.get('/check-username', requireAuth, async (req, res) => { const username = s(req.query.username, 32); if (username.length < 3) return res.json({ ok: true, available: false }); const { db } = fb(); if (!db) return res.json({ ok: true, available: true }); const snap = await db.collection('users').where('usernameLower', '==', username.toLowerCase()).limit(1).get(); res.json({ ok: true, available: snap.empty }); });
 router.post('/profile/update', requireAuth, async (req, res) => { const uid = uidOf(req); const patch = { fullName: s(req.body?.fullName, 80), username: s(req.body?.username, 32), avatar: s(req.body?.avatar, 1000) }; if (patch.username) patch.usernameLower = patch.username.toLowerCase(); Object.keys(patch).forEach(k => { if (patch[k] === '') delete patch[k]; }); await writeProfile(uid, patch); res.json({ ok: true, user: await readProfile(req, uid) }); });
 

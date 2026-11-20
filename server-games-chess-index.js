@@ -323,7 +323,7 @@ function maybeFinishByBoard(r, movedByColor) {
 }
 async function readProfile(uid) {
   const { db } = initFirebaseAdmin();
-  if (!db || !uid) return { uid, username: `Oyuncu-${String(uid).slice(0,5)}`, avatar: '', accountXp: 0 };
+  if (!db || !uid) return { uid, username: `Oyuncu-${String(uid).slice(0,5)}`, avatar: '' };
   const snap = await db.collection('users').doc(uid).get().catch(() => null);
   const data = snap?.exists ? (snap.data() || {}) : {};
   return { uid, ...data };
@@ -633,11 +633,14 @@ function emitLobby() {
 }
 async function refundWaitingBet(r, uid, reason = 'chess-room-refund') {
   if (!r?.bet || !uid) return null;
-  return creditBalance({ uid, amount: r.bet, reason, idempotencyKey: `${reason}:${r.id}:${uid}`, metadata: { roomId: r.id, mode: r.mode } }).catch((error) => ({ ok: false, error: error.message }));
+  return creditBalance({ uid, amount: r.bet, reason, idempotencyKey: `${reason}:${r.id}:${uid}`, metadata: { roomId: r.id, mode: r.mode, refundOfBet: true } }).catch((error) => ({ ok: false, error: error.message }));
 }
 async function cancelAndDeleteRoom(r, reason = 'room-cancelled') {
   if (!r) return false;
-  for (const p of liveHumanPlayers(r)) await refundWaitingBet(r, p.uid, reason).catch(() => null);
+  for (const player of liveHumanPlayers(r)) {
+    const refund = await refundWaitingBet(r, player.uid, reason).catch((error) => ({ok:false,error:error.message}));
+    if (r.bet && !refund?.ok) return false;
+  }
   r.status = 'finished';
   r.result = reason;
   r.winnerColor = 'draw';
@@ -820,8 +823,8 @@ router.get('/lobby', requireAuth, asyncRoute(async (req, res) => {
 router.get('/profile', requireAuth, asyncRoute(async (req, res) => {
   const profile = await readProfile(uidOf(req));
   const balance = await readBalance(uidOf(req));
-  const progression = getProgression(profile.xp ?? profile.accountXp ?? 0);
-  res.json({ ok: true, user: { ...profile, balance, xp: progression.currentXp, accountXp: progression.currentXp, accountLevel: progression.accountLevel, level: progression.accountLevel, accountLevelProgressPct: progression.accountLevelProgressPct, progression } });
+  const progression = getProgression(profile);
+  res.json({ ok: true, user: { ...profile, balance, accountLevel: progression.accountLevel, level: progression.accountLevel, accountLevelProgressPct: progression.accountLevelProgressPct, progression } });
 }));
 router.post('/create', requireAuth, asyncRoute(async (req, res) => {
   const r = await createRoomFor(req, { bet: req.body?.bet || 0, mode: req.body?.mode || '' });

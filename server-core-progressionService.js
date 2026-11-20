@@ -1,77 +1,78 @@
+'use strict';
+
+// Integer ticks prevent floating-point drift: 40,000 ticks = one level.
+// Levels 1-30: 1 MC = 2 ticks; levels 31-99: 1 MC = 1 tick.
 const MAX_LEVEL = 100;
-const BASE_LEVEL_STEP_XP = 250n;
-const MULTIPLIERS = Object.freeze([
-  { from: 1, to: 10, num: 135n, den: 100n },
-  { from: 10, to: 30, num: 145n, den: 100n },
-  { from: 30, to: 60, num: 155n, den: 100n },
-  { from: 60, to: 80, num: 170n, den: 100n },
-  { from: 80, to: 95, num: 190n, den: 100n },
-  { from: 95, to: 100, num: 225n, den: 100n }
-]);
+const TICKS_PER_LEVEL = 40000;
+const PROGRESSION_VERSION = 'playmatrix-mc-spend-v2';
+const LEVEL_LOW_WAGER_MC = 20000;
+const LEVEL_HIGH_WAGER_MC = 40000;
 
-function ceilDiv(a, b) { return (a + b - 1n) / b; }
-function multiplierForTransition(level) {
-  return MULTIPLIERS.find((range) => level >= range.from && level < range.to) || MULTIPLIERS[MULTIPLIERS.length - 1];
+function integer(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 0 ? n : fallback;
 }
-function normalizeXpBigInt(value = 0) {
-  if (typeof value === 'bigint') return value > 0n ? value : 0n;
-  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? BigInt(Math.floor(value)) : 0n;
-  const raw = String(value ?? '0').replace(/[^0-9]/g, '');
-  return raw ? BigInt(raw) : 0n;
+function boundedLevel(value) {
+  return Math.max(1, Math.min(MAX_LEVEL, integer(value, 1)));
 }
-function formatBigInt(value) {
-  return normalizeXpBigInt(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+function baseState(profile = {}) {
+  const old = profile && typeof profile === 'object' ? profile : {};
+  const level = boundedLevel(old.progressionBaseLevel ?? old.accountLevel ?? old.level ?? old.progression?.level ?? 1);
+  const savedTicks = old.progressionBaseTicks ?? old.accountLevelProgressTicks;
+  const priorPercent = Number(old.accountLevelProgressPct ?? old.progressPercent ?? old.progression?.progressPercent ?? 0);
+  const ticks = savedTicks === undefined || savedTicks === null
+    ? Math.round(Math.max(0, Math.min(99.9975, Number.isFinite(priorPercent) ? priorPercent : 0)) * 400)
+    : integer(savedTicks);
+  return { level, ticks: level === MAX_LEVEL ? TICKS_PER_LEVEL : Math.min(TICKS_PER_LEVEL - 1, ticks) };
 }
-function buildCurve() {
-  const requiredStepByLevel = Array(MAX_LEVEL + 1).fill(0n);
-  const totalXpByLevel = Array(MAX_LEVEL + 1).fill(0n);
-  requiredStepByLevel[1] = BASE_LEVEL_STEP_XP;
-  for (let level = 1; level < MAX_LEVEL; level += 1) {
-    const step = level === 1 ? BASE_LEVEL_STEP_XP : requiredStepByLevel[level];
-    totalXpByLevel[level + 1] = totalXpByLevel[level] + step;
-    const m = multiplierForTransition(level);
-    requiredStepByLevel[level + 1] = ceilDiv(step * m.num, m.den);
-    if (requiredStepByLevel[level + 1] < step) requiredStepByLevel[level + 1] = step;
+function advance(base, amount) {
+  let level = boundedLevel(base.level);
+  let ticks = Math.min(TICKS_PER_LEVEL, integer(base.ticks));
+  let remaining = integer(amount);
+  while (remaining && level < MAX_LEVEL) {
+    const rate = level <= 30 ? 2 : 1;
+    const needed = Math.ceil((TICKS_PER_LEVEL - ticks) / rate);
+    const spending = Math.min(needed, remaining);
+    ticks += spending * rate;
+    remaining -= spending;
+    if (ticks >= TICKS_PER_LEVEL) { level++; ticks = level === MAX_LEVEL ? TICKS_PER_LEVEL : ticks - TICKS_PER_LEVEL; }
   }
-  return { requiredStepByLevel, totalXpByLevel };
+  if (level === MAX_LEVEL) ticks = TICKS_PER_LEVEL;
+  return { level, ticks };
 }
-const CURVE = buildCurve();
-const THRESHOLDS = CURVE.totalXpByLevel.map((v) => Number(v <= BigInt(Number.MAX_SAFE_INTEGER) ? v : BigInt(Number.MAX_SAFE_INTEGER)));
-
-function getProgression(xpValue = 0) {
-  const xp = normalizeXpBigInt(xpValue);
-  let level = 1;
-  for (let candidate = 1; candidate <= MAX_LEVEL; candidate += 1) {
-    if (xp >= CURVE.totalXpByLevel[candidate]) level = candidate;
-    else break;
-  }
-  const isMaxLevel = level >= MAX_LEVEL;
-  const currentLevelStartXp = CURVE.totalXpByLevel[level];
-  const nextLevelXp = isMaxLevel ? currentLevelStartXp : CURVE.totalXpByLevel[level + 1];
-  const xpIntoLevel = xp > currentLevelStartXp ? xp - currentLevelStartXp : 0n;
-  const xpToNextLevel = isMaxLevel ? 0n : (nextLevelXp > xp ? nextLevelXp - xp : 0n);
-  const span = nextLevelXp > currentLevelStartXp ? nextLevelXp - currentLevelStartXp : 1n;
-  const progressPercent = isMaxLevel ? 100 : Number((xpIntoLevel * 10000n) / span) / 100;
-  const safeNumber = (v) => v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : Number.MAX_SAFE_INTEGER;
+function getProgression(profile = {}) {
+  const data = typeof profile === 'object' && profile !== null ? profile : {};
+  const base = baseState(data);
+  const spent = integer(data.progressionSpentMc);
+  const result = advance(base, spent);
+  const progressPercent = result.ticks / 400;
   return {
-    level,
-    xp: xp.toString(),
-    currentLevelStartXp: currentLevelStartXp.toString(),
-    nextLevelXp: nextLevelXp.toString(),
-    xpIntoLevel: xpIntoLevel.toString(),
-    xpToNextLevel: xpToNextLevel.toString(),
-    progressPercent: Math.max(0, Math.min(100, progressPercent)),
-    isMaxLevel,
-    formattedXp: formatBigInt(xp),
-    formattedNextLevelXp: formatBigInt(nextLevelXp),
-    formattedXpToNextLevel: formatBigInt(xpToNextLevel),
-    accountLevel: level,
-    currentXp: safeNumber(xp),
-    accountLevelProgressPct: Math.max(0, Math.min(100, progressPercent)),
-    version: 'playmatrix-progression-v1',
-    accountProgressionVersion: 'playmatrix-progression-v1',
-    accountLevelCurveMode: 'PM_TIERED_MULTIPLIER_BACKEND_V1',
-    curveMode: 'PM_TIERED_MULTIPLIER_BACKEND_V1'
+    level: result.level, accountLevel: result.level, progressTicks: result.ticks,
+    accountLevelProgressTicks: result.ticks, progressPercent, accountLevelProgressPct: progressPercent,
+    accountSpentMc: spent, progressionSpentMc: spent,
+    isMaxLevel: result.level === MAX_LEVEL,
+    version: PROGRESSION_VERSION, accountProgressionVersion: PROGRESSION_VERSION,
+    curveMode: 'MC_WAGER_TICKS', accountLevelCurveMode: 'MC_WAGER_TICKS'
   };
 }
-module.exports = { MAX_LEVEL, BASE_LEVEL_STEP_XP, MULTIPLIERS, THRESHOLDS, normalizeXpBigInt, formatBigInt, getProgression };
+function applyWagerToProfile(profile = {}, deltaMc = 0) {
+  if (!Number.isSafeInteger(deltaMc)) throw new RangeError('INVALID_WAGER_DELTA');
+  const base = baseState(profile);
+  const spent = integer(profile.progressionSpentMc);
+  const total = spent + deltaMc;
+  if (!Number.isSafeInteger(total)) throw new RangeError('WAGER_TOTAL_OVERFLOW');
+  // Historical refunds cannot reduce the preserved pre-migration baseline.
+  const nextSpent = Math.max(0, total);
+  const progression = getProgression({ progressionBaseLevel:base.level, progressionBaseTicks:base.ticks, progressionSpentMc:nextSpent });
+  return {
+    progressionBaseLevel: base.level, progressionBaseTicks: base.ticks,
+    progressionSpentMc: nextSpent,
+    accountLevel: progression.level, level: progression.level,
+    accountLevelProgressTicks: progression.progressTicks,
+    accountLevelProgressPct: progression.progressPercent,
+    progressPercent: progression.progressPercent,
+    accountProgressionVersion: PROGRESSION_VERSION,
+    accountLevelCurveMode: 'MC_WAGER_TICKS', progression
+  };
+}
+module.exports = { MAX_LEVEL, TICKS_PER_LEVEL, PROGRESSION_VERSION, LEVEL_LOW_WAGER_MC, LEVEL_HIGH_WAGER_MC, baseState, advance, getProgression, applyWagerToProfile };

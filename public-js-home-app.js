@@ -5,7 +5,6 @@ import { installGameRouteNormalizer } from "/public-js-home-game-catalog.js";
 import { installAuthModalGuards } from "/public-js-home-auth-modal.js";
 import { installProfilePanelGuards } from "/public-js-home-profile-panel.js";
 import { installLeaderboardGuards } from "/public-js-home-leaderboard.js";
-import { installStatsGuards } from "/public-js-home-stats.js";
 import { installSocialEntryGuards } from "/public-js-home-social-entry.js";
 import { installHeroSliderGuards } from "/public-js-home-hero-slider.js";
 import { installModalSafety } from "/public-js-home-modal.js";
@@ -23,7 +22,6 @@ const MODULES = Object.freeze([
   ["auth", installAuthModalGuards],
   ["profile", installProfilePanelGuards],
   ["leaderboard", installLeaderboardGuards],
-  ["stats", installStatsGuards],
   ["social", installSocialEntryGuards],
   ["hero", installHeroSliderGuards],
   ["reward", installRewardUiGuards],

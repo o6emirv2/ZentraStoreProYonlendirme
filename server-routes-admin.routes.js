@@ -25,15 +25,13 @@ function logAdmin(req, event, payload = {}) {
   return addAdminLog(event, { ...payload, actor: adminActor(req), path: req.originalUrl, at: now() });
 }
 function publicUser(uid, data = {}) {
-  const xp = Number(data.accountXp ?? data.xp ?? 0) || 0;
-  const progression = getProgression(xp);
+  const progression = getProgression(data);
   return {
     uid,
     email: data.email || '',
     username: data.username || data.displayName || data.fullName || uid,
     fullName: data.fullName || '',
     balance: Number(data.balance || 0),
-    accountXp: progression.currentXp,
     accountLevel: progression.accountLevel,
     accountLevelProgressPct: progression.accountLevelProgressPct,
     avatar: data.avatar || '',

@@ -51,14 +51,7 @@ function installProfileModalFallbackDelegation() {
       return;
     }
 
-    const statsTarget = event.target?.closest?.('#leaderboardListArea .lb-item, [data-open-player-stats], [data-player-uid]');
-    if (statsTarget && !statsTarget.classList?.contains('skeleton')) {
-      const uid = String(statsTarget.dataset.uid || statsTarget.dataset.playerUid || window.__PM_RUNTIME?.auth?.currentUser?.uid || '').trim();
-      if (uid && typeof window.showPlayerStats === 'function') {
-        event.preventDefault();
-        window.showPlayerStats(uid);
-      }
-    }
+
   }, true);
 
   document.addEventListener('click', (event) => {
