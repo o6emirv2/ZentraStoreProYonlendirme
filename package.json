@@ -13,7 +13,7 @@
     "check:server": "node --check server.js",
     "check:syntax": "node tests-validate.cjs",
     "build:hosting": "node scripts-build-hosting.cjs",
-    "test": "node tests-validate.cjs && node tests-economy.cjs && node tests-rewards.cjs && node tests-mc-upgrade.cjs && node tests-v21.cjs && node tests-pisti.cjs && node tests-classic.cjs"
+    "test": "node tests-validate.cjs && node tests-economy.cjs && node tests-rewards.cjs && node tests-mc-upgrade.cjs && node tests-v21.cjs && node tests-pisti.cjs && node tests-classic.cjs && node tests-security-hardening.cjs"
   },
   "dependencies": {
     "compression": "^1.7.4",
